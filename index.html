@@ -86,7 +86,7 @@ const LOGO='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAARgAAADUCAYAAABH0zz3AA
 const LS = k => localStorage.getItem('mib_'+k);
 const LSset = (k,v) => localStorage.setItem('mib_'+k, v);
 let msalApp=null, account=null, token=null;
-let S = { fileId: LS('fileId'), tfolderId: LS('tfolderId'), clientId: LS('clientId'), scanWeeks: parseInt(LS('scanWeeks')||'10') };
+let S = { fileId: LS('fileId'), fileDriveId: LS('fileDriveId'), tfolderId: LS('tfolderId'), tfolderDriveId: LS('tfolderDriveId'), clientId: LS('clientId'), scanWeeks: parseInt(LS('scanWeeks')||'10') };
 const PAID='#92D050', PEND='#FFC000';
 let cache = { dateIndex:null, exp:null, invRows:null, invFills:{}, monthBlocks:{} };
 const GRAPH='https://graph.microsoft.com/v1.0';
@@ -125,7 +125,9 @@ async function gbatch(reqs){ // reqs: [{id,method,url,body?}] max 20 per call
   }
   return out;
 }
-const WB = () => `/me/drive/items/${S.fileId}/workbook`;
+const fileItemPath = () => S.fileDriveId ? `/drives/${S.fileDriveId}/items/${S.fileId}` : `/me/drive/items/${S.fileId}`;
+const folderItemPath = () => S.tfolderDriveId ? `/drives/${S.tfolderDriveId}/items/${S.tfolderId}` : `/me/drive/items/${S.tfolderId}`;
+const WB = () => `${fileItemPath()}/workbook`;
 const wsRange = (sheet,addr) => `${WB()}/worksheets('${encodeURIComponent(sheet)}')/range(address='${addr}')`;
 
 /* ================= HELPERS ================= */
@@ -200,7 +202,7 @@ async function loadInvoiceFills(weeks,force){
   recent.forEach(w=>w.cols.forEach(col=>{
     const key=`${w.totRow}_${col.c}`;
     if(force || !(key in cache.invFills))
-      reqs.push({id:key,method:'GET',url:`/me/drive/items/${S.fileId}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
+      reqs.push({id:key,method:'GET',url:`${fileItemPath()}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
   }));
   if(reqs.length){ show(`Reading payment marks (${reqs.length} cells)…`);
     const res=await gbatch(reqs);
@@ -377,7 +379,7 @@ async function saveDeliv(){
   if(!entries.length) return;
   show(`Saving ${entries.length} cell(s) to the Master…`);
   const reqs=entries.map(([addr,val],i)=>({id:'w'+i,method:'PATCH',
-    url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026')/range(address='${addr}')`,
+    url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='${addr}')`,
     body:{values:[[val]]}}));
   const res=await gbatch(reqs);
   const fails=Object.values(res).filter(r=>r.status>=400);
@@ -425,7 +427,7 @@ async function renderStaff(){
   show('Loading timetables…');
   let files=[];
   if(S.tfolderId){
-    const r=await g(`/me/drive/items/${S.tfolderId}/children?$select=name,webUrl,lastModifiedDateTime&$orderby=name`);
+    const r=await g(`${folderItemPath()}/children?$select=name,webUrl,lastModifiedDateTime&$orderby=name`);
     files=r.value||[];
   }
   hide();
@@ -448,6 +450,7 @@ function renderSettings(){
   <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the file</label><input id="shareUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkByShareUrl()">Link it</button></div>
   <label>3. Timetables folder ${S.tfolderId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
   <button class="btn sm sec" onclick="findFolder()">Find "Schedules and Timetables" folder</button>
+  <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the folder</label><input id="shareFolderUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkFolderByShareUrl()">Link it</button></div>
   <div id="setout" style="margin-top:10px"></div>
   <label>Account</label>
   <p class="muted">${account?('Signed in as '+esc(account.username)+' — '):'Not signed in. '}</p>
@@ -460,7 +463,7 @@ async function findFile(){
   const hits=(r.value||[]).filter(x=>x.name.toLowerCase().endsWith('.xlsx'));
   if(!hits.length){ o.innerHTML='<div class="err">Not found in this OneDrive. Is this the right Microsoft account?</div>'; return; }
   o.innerHTML=hits.map((h,i)=>`<div class="row" style="margin-bottom:6px"><div style="flex:1;font-size:13px">${esc(h.name)}<br><small class="muted">${esc(h.parentReference?.path?.replace('/drive/root:','')||'')}</small></div>
-  <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};LSset("fileId",S.fileId);renderSettings()'>Use this</button></div>`).join(''); }
+  <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};S.fileDriveId=${JSON.stringify(h.parentReference&&h.parentReference.driveId||null)};LSset("fileId",S.fileId);LSset("fileDriveId",S.fileDriveId||"");renderSettings()'>Use this</button></div>`).join(''); }
 async function linkByShareUrl(){
     const o=document.getElementById('setout'); const input=(document.getElementById('shareUrl').value||'').trim();
     if(!input){ o.innerHTML='<div class="err">Paste a link first.</div>'; return; }
@@ -469,7 +472,7 @@ async function linkByShareUrl(){
           const b64=btoa(input).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
           const item=await g(`/shares/u!${b64}/driveItem?$select=id,name,parentReference,webUrl`);
           if(!item.name.toLowerCase().endsWith('.xlsx')){ o.innerHTML='<div class="err">That link is not an .xlsx file: '+esc(item.name)+'</div>'; return; }
-          S.fileId=item.id; LSset('fileId',S.fileId); renderSettings();
+          S.fileId=item.id; S.fileDriveId=(item.parentReference&&item.parentReference.driveId)||null; LSset('fileId',S.fileId); LSset('fileDriveId',S.fileDriveId||''); renderSettings();
     }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
 }
   
@@ -479,7 +482,18 @@ async function findFolder(){
   const hits=(r.value||[]).filter(x=>x.folder);
   if(!hits.length){ o.innerHTML='<div class="err">Folder not found.</div>'; return; }
   o.innerHTML=hits.map(h=>`<div class="row" style="margin-bottom:6px"><div style="flex:1;font-size:13px">📁 ${esc(h.name)}<br><small class="muted">${esc(h.parentReference?.path?.replace('/drive/root:','')||'')}</small></div>
-  <button class="btn sm" onclick='S.tfolderId=${JSON.stringify(h.id)};LSset("tfolderId",S.tfolderId);renderSettings()'>Use this</button></div>`).join('');
+  <button class="btn sm" onclick='S.tfolderId=${JSON.stringify(h.id)};S.tfolderDriveId=${JSON.stringify(h.parentReference&&h.parentReference.driveId||null)};LSset("tfolderId",S.tfolderId);LSset("tfolderDriveId",S.tfolderDriveId||"");renderSettings()'>Use this</button></div>`).join('');
+}
+async function linkFolderByShareUrl(){
+    const o=document.getElementById('setout'); const input=(document.getElementById('shareFolderUrl').value||'').trim();
+    if(!input){ o.innerHTML='<div class="err">Paste a link first.</div>'; return; }
+    o.innerHTML='Resolving link…';
+    try{
+          const b64=btoa(input).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
+          const item=await g(`/shares/u!${b64}/driveItem?$select=id,name,folder,parentReference,webUrl`);
+          if(!item.folder){ o.innerHTML='<div class="err">That link is not a folder: '+esc(item.name)+'</div>'; return; }
+          S.tfolderId=item.id; S.tfolderDriveId=(item.parentReference&&item.parentReference.driveId)||null; LSset('tfolderId',S.tfolderId); LSset('tfolderDriveId',S.tfolderDriveId||''); renderSettings();
+    }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
 }
 
 /* ---------- SYNC & BOOT ---------- */
