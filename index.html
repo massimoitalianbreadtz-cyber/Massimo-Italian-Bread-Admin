@@ -473,7 +473,6 @@ async function linkByShareUrl(){
     }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
 }
   
-}
 async function findFolder(){
   const o=document.getElementById('setout'); o.innerHTML='Searching…';
   const r=await g(`/me/drive/root/search(q='Schedules and Timetables')?$select=id,name,folder,parentReference&$top=10`);
