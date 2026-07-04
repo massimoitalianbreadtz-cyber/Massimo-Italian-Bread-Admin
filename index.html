@@ -460,7 +460,7 @@ async function findFile(){
   const hits=(r.value||[]).filter(x=>x.name.toLowerCase().endsWith('.xlsx'));
   if(!hits.length){ o.innerHTML='<div class="err">Not found in this OneDrive. Is this the right Microsoft account?</div>'; return; }
   o.innerHTML=hits.map((h,i)=>`<div class="row" style="margin-bottom:6px"><div style="flex:1;font-size:13px">${esc(h.name)}<br><small class="muted">${esc(h.parentReference?.path?.replace('/drive/root:','')||'')}</small></div>
-  <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};LSset("fileId",S.fileId);renderSettings()'>Use this</button></div>`).join('');
+  <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};LSset("fileId",S.fileId);renderSettings()'>Use this</button></div>`).join(''); }
 async function linkByShareUrl(){
     const o=document.getElementById('setout'); const input=(document.getElementById('shareUrl').value||'').trim();
     if(!input){ o.innerHTML='<div class="err">Paste a link first.</div>'; return; }
