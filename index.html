@@ -448,6 +448,7 @@ function renderSettings(){
   <label>3. Timetables folder ${S.tfolderId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
   <button class="btn sm sec" onclick="findFolder()">Find "Schedules and Timetables" folder</button>
   <div id="setout" style="margin-top:10px"></div>
+  <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the file</label><input id="shareUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkByShareUrl()">Link it</button></div>
   <label>Account</label>
   <p class="muted">${account?('Signed in as '+esc(account.username)+' — '):'Not signed in. '}</p>
   <div class="row">${account?'<button class="btn sm sec" onclick="msalApp.logoutRedirect()">Sign out</button>':(S.clientId?'<button class="btn sm" onclick="login()">Sign in</button>':'')}</div>
@@ -461,6 +462,18 @@ async function findFile(){
   if(!hits.length){ o.innerHTML='<div class="err">Not found in this OneDrive. Is this the right Microsoft account?</div>'; return; }
   o.innerHTML=hits.map((h,i)=>`<div class="row" style="margin-bottom:6px"><div style="flex:1;font-size:13px">${esc(h.name)}<br><small class="muted">${esc(h.parentReference?.path?.replace('/drive/root:','')||'')}</small></div>
   <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};LSset("fileId",S.fileId);renderSettings()'>Use this</button></div>`).join('');
+async function linkByShareUrl(){
+    const o=document.getElementById('setout'); const input=(document.getElementById('shareUrl').value||'').trim();
+    if(!input){ o.innerHTML='<div class="err">Paste a link first.</div>'; return; }
+    o.innerHTML='Resolving link…';
+    try{
+          const b64=btoa(input).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
+          const item=await g(`/shares/u!${b64}/driveItem?$select=id,name,parentReference,webUrl`);
+          if(!item.name.toLowerCase().endsWith('.xlsx')){ o.innerHTML='<div class="err">That link is not an .xlsx file: '+esc(item.name)+'</div>'; return; }
+          S.fileId=item.id; LSset('fileId',S.fileId); renderSettings();
+    }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
+}
+  
 }
 async function findFolder(){
   const o=document.getElementById('setout'); o.innerHTML='Searching…';
