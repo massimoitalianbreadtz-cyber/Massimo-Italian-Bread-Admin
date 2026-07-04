@@ -445,14 +445,13 @@ function renderSettings(){
   <div class="row" style="margin-top:8px"><button class="btn sm" onclick="S.clientId=document.getElementById('cid').value.trim();LSset('clientId',S.clientId);location.reload()">Save Client ID</button></div>
   <label>2. Master Excel file ${S.fileId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
   <button class="btn sm sec" onclick="findFile()">Find Salty_Water_2026_Master.xlsx</button>
+  <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the file</label><input id="shareUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkByShareUrl()">Link it</button></div>
   <label>3. Timetables folder ${S.tfolderId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
   <button class="btn sm sec" onclick="findFolder()">Find "Schedules and Timetables" folder</button>
   <div id="setout" style="margin-top:10px"></div>
-  <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the file</label><input id="shareUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkByShareUrl()">Link it</button></div>
   <label>Account</label>
   <p class="muted">${account?('Signed in as '+esc(account.username)+' — '):'Not signed in. '}</p>
   <div class="row">${account?'<button class="btn sm sec" onclick="msalApp.logoutRedirect()">Sign out</button>':(S.clientId?'<button class="btn sm" onclick="login()">Sign in</button>':'')}</div>
-  </div>
   <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, and set cell colours on the [Invoices & Income] sheet. Everything else is read-only by design. It never deletes rows, never edits formulas, never touches other sheets.</p></div>`;
 }
 async function findFile(){
