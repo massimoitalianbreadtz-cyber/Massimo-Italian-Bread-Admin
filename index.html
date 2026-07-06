@@ -326,16 +326,15 @@ async function render(){
     // name and retry automatically once per navigation, instead of leaving Gu stuck on an error
     // until she manually re-links it in Settings.
     if(_recoverAttempts<2 && /itemNotFound/.test(e.message)){
-      const staleFile=S.fileId && e.message.includes(S.fileId);
-      const staleFolder=S.tfolderId && e.message.includes(S.tfolderId);
-      if(staleFile || staleFolder){
-        _recoverAttempts++;
-        show('Reconnecting to your file…');
-        let recovered=false;
-        if(staleFile) recovered = await reresolveFileId() || recovered;
-        if(staleFolder) recovered = await reresolveFolderId() || recovered;
-        if(recovered) return render();
-      }
+      // Note: g()'s error message truncates the path to 80 chars, which can cut off the tail of a
+      // long item ID — so we don't try to match the exact stale ID in the message. Any itemNotFound
+      // is cheap enough to treat as "re-resolve both and retry" rather than risk a substring miss.
+      _recoverAttempts++;
+      show('Reconnecting to your file…');
+      let recovered=false;
+      if(S.fileId) recovered = await reresolveFileId() || recovered;
+      if(S.tfolderId) recovered = await reresolveFolderId() || recovered;
+      if(recovered) return render();
     }
     M.innerHTML=`<div class="err">Error: ${esc(e.message)}</div><button class="btn" onclick="render()">Retry</button>`;
   }
