@@ -595,11 +595,16 @@ function parseWeekLabel(label,defYear){
 /* Fix (Gu, 2026-07-06): "invoice number" on this page was actually just echoing the branch code
    for Shoppers and always blank for Village/Butcher — the [Invoices & Income] sheet itself has no
    real invoice numbers in it. The real numbers live in the Shoppers/Village/Butcher Receipts
-   sheets (Invoice_Number column), matched here by week + branch. */
+   sheets (Invoice_Number column), matched here by week + branch.
+   Fix 2 (Gu, 2026-07-06, same day): the first fix keyed the lookup by Client_Branch (e.g. "MASAKI
+   BRANCH"), but the Income page's column names are just the short code (e.g. "SMA"), and for
+   Village/Butcher the Client_Branch cell is blank in those sheets — so every lookup missed and the
+   column stayed empty. Rebuilt the key from the code embedded in Invoice_Number itself
+   (e.g. "131/26/SMA" -> "SMA", "27/26/VLG" -> "VLG"), which every sheet has reliably. */
 function sheetForCol(name){
-  if(name==='BUTCHER') return {sheet:'Butcher Receipts', branch:'Butcher'};
-  if(name==='VILLAGE') return {sheet:'Village Receipts', branch:'Village'};
-  return {sheet:'Shoppers Receipts', branch:String(name).trim().split(/\s+/).pop()};
+  if(name==='BUTCHER') return {sheet:'Butcher Receipts', code:'BUT'};
+  if(name==='VILLAGE') return {sheet:'Village Receipts', code:'VLG'};
+  return {sheet:'Shoppers Receipts', code:String(name).trim().split(/\s+/).pop().toUpperCase()};
 }
 async function loadReceiptInvoiceNumbers(force){
   if(cache.recInv && !force) return cache.recInv;
@@ -608,10 +613,11 @@ async function loadReceiptInvoiceNumbers(force){
     const r=await g(wsRange(sheet,'A1:H400')+'?$select=values');
     const V=r.values||[]; if(!V.length) continue;
     const header=V[0]; const col=n=>header.indexOf(n);
-    const wsIdx=col('Week_Start_Date'), invIdx=col('Invoice_Number'), branchIdx=col('Client_Branch')>=0?col('Client_Branch'):col('Client_Name');
+    const wsIdx=col('Week_Start_Date'), invIdx=col('Invoice_Number');
     for(let i=1;i<V.length;i++){
       const row=V[i]; const d=excelDate(row[wsIdx]); if(!d) continue;
-      map[sheet+'|'+ymd(d)+'|'+(row[branchIdx]||'')]=row[invIdx]||'';
+      const inv=row[invIdx]||''; const code=String(inv).split('/').pop().toUpperCase();
+      map[sheet+'|'+ymd(d)+'|'+code]=inv;
     }
   }
   cache.recInv=map; return map;
@@ -657,7 +663,7 @@ async function renderIncome(){
   ${w.cols.filter(c=>c.amount>0).map(col=>{
     const key=`${w.totRow}_${col.c}`, st=classifyFill(cache.invFills[key]);
     const sc=sheetForCol(col.name);
-    const invNo=invMap[sc.sheet+'|'+ymd(w._start)+'|'+sc.branch]||'';
+    const invNo=invMap[sc.sheet+'|'+ymd(w._start)+'|'+sc.code]||'';
     return `<tr><td>${esc(col.name)}</td><td class="muted">${esc(invNo)}</td>
     <td class="num">${fmt(col.amount)}</td>
     <td><span class="pill ${st}">${st==='paid'?'Paid':st==='pend'?'Pending':'—'}</span></td></tr>`;
