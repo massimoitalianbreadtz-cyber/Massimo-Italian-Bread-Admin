@@ -6,7 +6,10 @@
 <meta name="theme-color" content="#A71B1B">
 <title>Massimo Admin</title>
 <link rel="manifest" id="manifest">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/msal-browser/2.38.3/msal-browser.min.js"></script>
+<!-- Switched from cdnjs to jsDelivr: cdnjs was intermittently returning 503 for this exact file,
+     which silently broke Sign-in (msal never loaded, so "Sign in" did nothing) with no visible
+     error until the login() error handling was added. jsDelivr verified reliable at time of fix. -->
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
