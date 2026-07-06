@@ -741,10 +741,13 @@ async function loadInvoiceSummaries(){
    Master file/timetables folder already do) so this doesn't re-search by name on every visit. */
 const RECEIPT_FOLDERS={Shoppers:'Shoppers_Receipts_2026',Village:'Village_Receipts_2026',Butcher:'Butcher_Receipts_2026'};
 const SHOPPERS_CODES=['SMA','SMB','SMI','STE','SML'];
+const REGION_CODES={Village:'VLG',Butcher:'BUT'}; // actual code found inside filenames (display label is the full key)
 function codeFromFilename(name,key){
   const base=name.replace(/\.pdf$/i,'');
+  if(!/^Invoice[_-]/i.test(base)) return null; // must actually be an invoice file, not a stray document
   if(key==='Shoppers'){ const m=base.match(/(SMA|SMB|SMI|STE|SML)$/i); return m?m[1].toUpperCase():null; }
-  return key.toUpperCase(); // Village/Butcher: one client each, code = the key itself
+  const rc=REGION_CODES[key];
+  return new RegExp(rc,'i').test(base) ? key.toUpperCase() : null;
 }
 async function resolveReceiptFolder(key){
   if(S.pdfFolders[key]) return S.pdfFolders[key];
@@ -761,19 +764,33 @@ async function loadReceiptPdfs(){
   try{
     show('Finding the latest receipts…');
     let html='';
+    const listChildren=async(id)=>{
+      const r=await g(`/me/drive/items/${id}/children?$select=id,name,webUrl,lastModifiedDateTime,file,folder&$top=200`);
+      return r.value||[];
+    };
     for(const key of Object.keys(RECEIPT_FOLDERS)){
       let folderId=await resolveReceiptFolder(key);
       let files=[];
-      const fetchPdfs=async(id)=>{
-        const r=await g(`/me/drive/items/${id}/search(q='.pdf')?$select=name,webUrl,lastModifiedDateTime,file&$top=200`);
-        return (r.value||[]).filter(x=>x.file && x.name.toLowerCase().endsWith('.pdf'));
+      /* Graph's /items/{id}/search(q=...) is NOT reliably scoped to the folder's own contents — it was
+         found returning unrelated files from across the whole OneDrive. Using /children instead, which
+         is exact and also faster (no drive-wide scan). Shoppers is nested (batches of 5 in "Invoices N-M"
+         subfolders); Village/Butcher are flat. */
+      const fetchFiles=async(id)=>{
+        if(key==='Shoppers'){
+          const kids=await listChildren(id);
+          const subfolders=kids.filter(x=>x.folder).sort((a,b)=>(b.lastModifiedDateTime||'').localeCompare(a.lastModifiedDateTime||''));
+          let out=[];
+          for(const sf of subfolders.slice(0,2)){ out=out.concat((await listChildren(sf.id)).filter(x=>x.file)); }
+          return out;
+        }
+        return (await listChildren(id)).filter(x=>x.file);
       };
       if(folderId){
-        try{ files=await fetchPdfs(folderId); }
+        try{ files=await fetchFiles(folderId); }
         catch(e){ // cached folder ID may be stale (moved/renamed) — clear and retry once
           delete S.pdfFolders[key]; LSset('pdfFolders',JSON.stringify(S.pdfFolders));
           folderId=await resolveReceiptFolder(key);
-          if(folderId) files=await fetchPdfs(folderId);
+          if(folderId) files=await fetchFiles(folderId);
         }
       }
       html+=`<h3 class="wk">${key}</h3>`;
