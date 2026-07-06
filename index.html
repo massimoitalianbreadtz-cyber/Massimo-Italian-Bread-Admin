@@ -6,21 +6,26 @@
 <meta name="theme-color" content="#A71B1B">
 <title>Massimo Admin</title>
 <link rel="manifest" id="manifest">
-<script src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js" integrity="sha384-PARf28kmic36Ve+O3DnUerRXFtOQ7ZDqRDGpLcbljly5/N39T2OV3kt3QsWOKeAX" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/msal-browser/2.38.3/msal-browser.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Yeseva+One&family=Lora:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
-:root{--brown:#A71B1B;--brand:#A71B1B;--brand-dk:#7d1414;--cream:#FFFDFD;--bg:#FAF5F0;--card:#fff;--ink:#141313;--muted:#8b7f78;--green:#2e7d32;--greenbg:#e6f4e6;--orange:#e65100;--orangebg:#fff3e0;--red:#A71B1B;--line:#eee2da}
-*{box-sizing:border-box;margin:0;padding:0;font-family:'Lora',Georgia,serif}
+/* Brand tokens from Massimo Italian Bread brandkit (colors_and_type.css). Display="Bradley Hand" (web: Caveat),
+   Body="Book Antiqua" (web: Cormorant Garamond). System fonts are tried first since they render closer to the real brandkit. */
+:root{--brown:#A71B1B;--brand:#A71B1B;--brand-dk:#7F1414;--cream:#FFFDFD;--bg:#FAF5F0;--card:#fff;--ink:#141313;--muted:#8b7f78;--green:#2e7d32;--greenbg:#e6f4e6;--orange:#e65100;--orangebg:#fff3e0;--red:#A71B1B;--line:#eee2da;
+--font-display:'Bradley Hand','Caveat','Segoe Script',cursive;--font-body:'Book Antiqua','Palatino Linotype','Cormorant Garamond',Georgia,serif}
+*{box-sizing:border-box;margin:0;padding:0;font-family:var(--font-body)}
 body{background:var(--bg);color:var(--ink);padding-bottom:86px}
-header{background:linear-gradient(135deg,#141313 0%,#2a1414 60%,#3d1010 100%);color:#FFFDFD;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10;border-bottom:3px solid var(--brand);box-shadow:0 2px 12px rgba(20,19,19,.25)}
+header{background:linear-gradient(135deg,#141313 0%,#2a1414 60%,#3d1010 100%);color:#FFFDFD;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10;border-bottom:3px solid var(--brand);box-shadow:0 2px 12px rgba(20,19,19,.25)}
 header .hbrand{display:flex;align-items:center;gap:12px}
-header img.logo{height:44px;width:auto;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
-header h1{font-size:19px;font-weight:400;font-family:'Yeseva One',serif;letter-spacing:.3px}
+header .logochip{background:var(--cream);border-radius:12px;padding:5px 8px;display:flex;align-items:center;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+header img.logo{height:38px;width:auto;display:block}
+header h1{font-size:22px;font-weight:600;font-family:var(--font-display);letter-spacing:.3px}
 header .sub{font-size:11px;opacity:.75;font-style:italic}
+header .userchip{font-size:11px;opacity:.85;cursor:pointer;text-decoration:underline}
 main{padding:12px;max-width:900px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px rgba(20,19,19,.06)}
-.card h2{font-size:16px;color:var(--brand);margin-bottom:10px;font-family:'Yeseva One',serif;font-weight:400;letter-spacing:.3px;border-bottom:2px solid var(--line);padding-bottom:6px}
+.card h2{font-size:18px;color:var(--brand);margin-bottom:10px;font-family:var(--font-display);font-weight:600;letter-spacing:.3px;border-bottom:2px solid var(--line);padding-bottom:6px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 .kpi{background:linear-gradient(180deg,#FFF9F5,#FBF1EA);border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:12px;padding:12px}
 .kpi .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
@@ -31,9 +36,9 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{color:var(--muted);text-align:left;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--line);font-size:11px}
 td{padding:5px 6px;border-bottom:1px solid var(--line)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-nav{position:fixed;bottom:10px;left:10px;right:10px;background:rgba(20,19,19,.92);backdrop-filter:blur(8px);border-radius:20px;display:flex;z-index:20;padding:6px;box-shadow:0 6px 24px rgba(20,19,19,.35)}
-nav button{flex:1;background:none;border:none;padding:7px 2px 8px;font-size:10px;color:#cbbdb6;cursor:pointer;border-radius:14px;transition:all .2s;font-family:'Lora',serif}
-nav button .ic{display:block;margin:0 auto 3px;width:22px;height:22px}
+nav{position:fixed;bottom:10px;left:10px;right:10px;background:rgba(20,19,19,.92);backdrop-filter:blur(8px);border-radius:20px;display:flex;z-index:20;padding:6px;box-shadow:0 6px 24px rgba(20,19,19,.35);overflow-x:auto}
+nav button{flex:1 0 auto;min-width:58px;background:none;border:none;padding:7px 4px 8px;font-size:9.5px;color:#cbbdb6;cursor:pointer;border-radius:14px;transition:all .2s;font-family:var(--font-body);white-space:nowrap}
+nav button .ic{display:block;margin:0 auto 3px;width:20px;height:20px}
 nav button .ic svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 nav button.active{color:#fff;background:var(--brand);font-weight:700;box-shadow:0 2px 8px rgba(167,27,27,.45)}
 .btn{background:var(--brand);color:#fff;border:none;border-radius:99px;padding:10px 18px;font-size:14px;cursor:pointer;font-family:'Lora',serif;font-weight:600;box-shadow:0 2px 6px rgba(167,27,27,.3);transition:background .2s}
@@ -65,18 +70,28 @@ h3.wk{font-size:13px;margin:12px 0 4px;color:var(--brown)}
 .filelink{display:block;padding:11px 8px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none;font-size:14px}
 .filelink small{color:var(--muted);display:block;font-size:11px}
 .tot{font-weight:700;background:var(--cream)}
-@media(min-width:700px){nav{max-width:560px;left:50%;right:auto;transform:translateX(-50%)}}
+.locked{background:#f2f2f2!important;color:var(--muted)!important;cursor:not-allowed}
+.review{background:var(--orangebg);border:1px solid var(--orange);border-radius:12px;padding:10px 12px;margin-top:10px;font-size:13px}
+.review table{font-size:12px}
+.pinpad{max-width:340px;margin:0 auto}
+.userlist{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:14px 0}
+.userbtn{background:#fff;border:1.5px solid var(--line);border-radius:14px;padding:14px 18px;cursor:pointer;font-family:var(--font-body);font-size:15px;min-width:100px}
+.userbtn .role{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+@media(min-width:700px){nav{max-width:640px;left:50%;right:auto;transform:translateX(-50%)}}
 </style>
 </head>
 <body>
-<header><div class="hbrand"><img class="logo" id="logoimg" alt="Massimo Italian Bread"><div><h1 id="title">Massimo Italian Bread</h1><div class="sub" id="subtitle">Salty Water administration</div></div></div><button class="btn sm sec" id="syncBtn" onclick="fullSync()" style="display:none;background:transparent;color:#FFFDFD;border-color:#FFFDFD">⟳ Sync</button></header>
+<header><div class="hbrand"><div class="logochip"><img class="logo" id="logoimg" alt="Massimo Italian Bread"></div><div><h1 id="title">Massimo Italian Bread</h1><div class="sub" id="subtitle">Salty Water administration</div><div class="userchip" id="userchip" style="display:none" onclick="switchUser()"></div></div></div><button class="btn sm sec" id="syncBtn" onclick="fullSync()" style="display:none;background:transparent;color:#FFFDFD;border-color:#FFFDFD">⟳ Sync</button></header>
 <div id="loader"><div class="spin"></div><div id="loadmsg">Loading…</div></div>
 <main id="main"></main>
 <nav id="nav" style="display:none">
 <button data-p="home" onclick="go('home')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></span>Overview</button>
 <button data-p="deliv" onclick="go('deliv')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M1 7h14v10H1z"/><path d="M15 10h4l3 3v4h-7"/><circle cx="5.5" cy="17.5" r="1.8"/><circle cx="18.5" cy="17.5" r="1.8"/></svg></span>Deliveries</button>
-<button data-p="inv" onclick="go('inv')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span>Invoices</button>
-<button data-p="staff" onclick="go('staff')"><span class="ic"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c.7-3.6 3.4-5.5 6.5-5.5s5.8 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14.7c2.7.2 4.9 1.9 5.5 5.3"/></svg></span>Staff</button>
+<button data-p="invoices" onclick="go('invoices')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span>Invoices</button>
+<button data-p="income" onclick="go('income')"><span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.5 1.3-2.2 3-2.2s3 .9 3 2.1c0 2.8-6 1.3-6 4.1 0 1.3 1.3 2.2 3 2.2s3-.7 3-2.2"/></svg></span>Income</button>
+<button data-p="exp" onclick="go('exp')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h11"/></svg></span>Expenses</button>
+<button data-p="staff" onclick="go('staff')"><span class="ic"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c.7-3.6 3.4-5.5 6.5-5.5s5.8 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14.7c2.7.2 4.9 1.9 5.5 5.3"/></svg></span>Schedule</button>
+<button data-p="cal" onclick="go('cal')"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span>Calendar</button>
 <button data-p="set" onclick="go('set')"><span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg></span>Settings</button>
 </nav>
 <script>
@@ -86,7 +101,26 @@ const LOGO='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAARgAAADUCAYAAABH0zz3AA
 const LS = k => localStorage.getItem('mib_'+k);
 const LSset = (k,v) => localStorage.setItem('mib_'+k, v);
 let msalApp=null, account=null, token=null;
-let S = { fileId: LS('fileId'), fileDriveId: LS('fileDriveId'), tfolderId: LS('tfolderId'), tfolderDriveId: LS('tfolderDriveId'), clientId: LS('clientId'), scanWeeks: parseInt(LS('scanWeeks')||'10') };
+let S = { fileId: LS('fileId'), tfolderId: LS('tfolderId'), clientId: LS('clientId'), scanWeeks: parseInt(LS('scanWeeks')||'10') };
+
+/* ================= USERS & ROLES (item 1) =================
+   This is a lightweight, DEVICE-LOCAL name+PIN layer for accountability, NOT a Microsoft-level
+   security boundary. Every device still shares the ONE Microsoft/OneDrive connection set up in
+   Settings. Set up the same user list on every device during install so the same names/PINs work
+   everywhere. See the instructions guide for the full explanation. */
+const ROLES = {
+  admin:  {label:'Admin',  canWrite:true,  canManageUsers:true},
+  editor: {label:'Editor', canWrite:true,  canManageUsers:false},
+  viewer: {label:'Viewer', canWrite:false, canManageUsers:false}
+};
+function getUsers(){ try{ return JSON.parse(localStorage.getItem('mib_users')||'[]'); }catch(e){ return []; } }
+function setUsers(u){ localStorage.setItem('mib_users', JSON.stringify(u)); }
+let currentUser = null; // {name, role} for this browser tab session
+function can(action){ // action: 'write' | 'manageUsers'
+  if(!currentUser) return false;
+  const r = ROLES[currentUser.role] || ROLES.viewer;
+  return action==='manageUsers' ? r.canManageUsers : r.canWrite;
+}
 const PAID='#92D050', PEND='#FFC000';
 let cache = { dateIndex:null, exp:null, invRows:null, invFills:{}, monthBlocks:{} };
 const GRAPH='https://graph.microsoft.com/v1.0';
@@ -125,9 +159,7 @@ async function gbatch(reqs){ // reqs: [{id,method,url,body?}] max 20 per call
   }
   return out;
 }
-const fileItemPath = () => S.fileDriveId ? `/drives/${S.fileDriveId}/items/${S.fileId}` : `/me/drive/items/${S.fileId}`;
-const folderItemPath = () => S.tfolderDriveId ? `/drives/${S.tfolderDriveId}/items/${S.tfolderId}` : `/me/drive/items/${S.tfolderId}`;
-const WB = () => `${fileItemPath()}/workbook`;
+const WB = () => `/me/drive/items/${S.fileId}/workbook`;
 const wsRange = (sheet,addr) => `${WB()}/worksheets('${encodeURIComponent(sheet)}')/range(address='${addr}')`;
 
 /* ================= HELPERS ================= */
@@ -202,7 +234,7 @@ async function loadInvoiceFills(weeks,force){
   recent.forEach(w=>w.cols.forEach(col=>{
     const key=`${w.totRow}_${col.c}`;
     if(force || !(key in cache.invFills))
-      reqs.push({id:key,method:'GET',url:`${fileItemPath()}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
+      reqs.push({id:key,method:'GET',url:`/me/drive/items/${S.fileId}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
   }));
   if(reqs.length){ show(`Reading payment marks (${reqs.length} cells)…`);
     const res=await gbatch(reqs);
@@ -227,7 +259,7 @@ function aggregate(rows){
     const k=x.name+'|'+x.product;
     (a.byPC[k]=a.byPC[k]||{client:x.name,product:x.product,plan:0,ret:0,sold:0,sales:0});
     a.byPC[k].plan+=p; a.byPC[k].ret+=rt; a.byPC[k].sold+=sl; a.byPC[k].sales+=tt;
-    (a.byClient[x.name]=a.byClient[x.name]||{plan:0,ret:0,sold:0,sales:0});
+    (a.byClient[x.name]=a.byClient[x.name]||{name:x.name,plan:0,ret:0,sold:0,sales:0});
     const c=a.byClient[x.name]; c.plan+=p; c.ret+=rt; c.sold+=sl; c.sales+=tt;
   });
   return a;
@@ -246,23 +278,73 @@ const M=document.getElementById('main');
 
 async function render(){
   try{
-    if(!S.clientId || !S.fileId){ page='set'; }
-    if(page==='set') return renderSettings();
+    const bootstrapping = !S.clientId || !S.fileId; // nothing configured yet -> Settings must be reachable with no gate at all
+    if(bootstrapping){ return renderSettings(); }
     if(!account){ return renderLogin(); }
+    if(!currentUser){ return renderPinGate(); } // QC fix: previously Settings was reachable WITHOUT
+    // a PIN even once the app was fully set up, letting anyone relink the Master file or sign out
+    // without identifying themselves. Now every page, including Settings, requires the PIN gate
+    // once the app is configured.
+    document.getElementById('userchip').style.display='';
+    document.getElementById('userchip').textContent=currentUser.name+' ('+ROLES[currentUser.role].label+') · switch';
+    if(page==='set') return renderSettings();
     if(page==='home') return await renderHome();
     if(page==='deliv') return await renderDeliv();
-    if(page==='inv') return await renderInv();
+    if(page==='invoices') return await renderInvoices();
+    if(page==='income') return await renderIncome();
+    if(page==='exp') return await renderExpenses();
     if(page==='staff') return await renderStaff();
+    if(page==='cal') return renderCalendar();
   }catch(e){ hide(); M.innerHTML=`<div class="err">Error: ${esc(e.message)}</div><button class="btn" onclick="render()">Retry</button>`; }
 }
 function renderLogin(){
   M.innerHTML=`<div class="card" style="text-align:center;padding:40px 20px">
   <img src="${LOGO}" alt="Massimo Italian Bread" style="max-width:200px;margin-bottom:16px">
-  <h2 style="border:none">Sign in</h2><p class="muted" style="margin:10px 0 20px">Sign in with the Microsoft account that holds the Master Excel in OneDrive.</p>
+  <h2 style="border:none">Sign in</h2><p class="muted" style="margin:10px 0 20px">Sign in with the Microsoft account that holds the Master Excel in OneDrive. (One-time per device — do this once during install, then staff only use the PIN screen below.)</p>
   <button class="btn" onclick="login()">Sign in with Microsoft</button></div>`;
 }
+/* ---------- PIN GATE (item 1: who is using the app right now) ---------- */
+function switchUser(){ currentUser=null; render(); }
+function renderPinGate(){
+  hide();
+  const users=getUsers();
+  if(!users.length){
+    M.innerHTML=`<div class="card pinpad" style="text-align:center;padding:30px 20px">
+    <h2 style="border:none">First-time setup</h2>
+    <p class="muted" style="margin-bottom:14px">No users yet on this device. Create the first Admin user (that's probably you, Gu). You can add staff (Editor/Viewer) afterwards from Settings.</p>
+    <label>Name</label><input id="fname" placeholder="e.g. Gu">
+    <label>4-digit PIN</label><input id="fpin" placeholder="e.g. 1234" maxlength="4" inputmode="numeric">
+    <div class="row" style="margin-top:14px;justify-content:center"><button class="btn" onclick="createFirstAdmin()">Create Admin & continue</button></div>
+    </div>`;
+    return;
+  }
+  M.innerHTML=`<div class="card pinpad" style="text-align:center;padding:30px 20px">
+  <h2 style="border:none">Who is using the app?</h2>
+  <p class="muted" style="margin-bottom:6px">Pick your name, then enter your PIN.</p>
+  <div class="userlist">${users.map((u,i)=>`<button class="userbtn" onclick="selectUser(${i})">${esc(u.name)}<span class="role">${ROLES[u.role]?.label||u.role}</span></button>`).join('')}</div>
+  <div id="pinstep" style="display:none">
+    <label>PIN for <span id="pinfor"></span></label>
+    <input id="pinval" maxlength="4" inputmode="numeric" placeholder="••••">
+    <div class="row" style="margin-top:10px;justify-content:center"><button class="btn" onclick="confirmPin()">Enter</button></div>
+    <div id="pinerr" class="err" style="display:none;margin-top:10px"></div>
+  </div>
+  </div>`;
+}
+let pinSelIdx=null;
+function selectUser(i){ pinSelIdx=i; const u=getUsers()[i]; document.getElementById('pinfor').textContent=u.name; document.getElementById('pinstep').style.display=''; document.getElementById('pinval').focus(); }
+function confirmPin(){
+  const u=getUsers()[pinSelIdx]; const v=document.getElementById('pinval').value.trim();
+  if(v!==u.pin){ const e=document.getElementById('pinerr'); e.textContent='Wrong PIN, try again.'; e.style.display=''; return; }
+  currentUser={name:u.name, role:u.role}; sessionStorage.setItem('mib_curuser', JSON.stringify(currentUser)); render();
+}
+function createFirstAdmin(){
+  const name=document.getElementById('fname').value.trim(), pin=document.getElementById('fpin').value.trim();
+  if(!name||pin.length<4){ alert('Enter a name and a 4-digit PIN.'); return; }
+  setUsers([{name,pin,role:'admin'}]);
+  currentUser={name,role:'admin'}; sessionStorage.setItem('mib_curuser', JSON.stringify(currentUser)); render();
+}
 
-/* ---------- HOME ---------- */
+/* ---------- HOME (item 2: summarised per client, no per-cell invoice-fill scan -> faster) ---------- */
 async function renderHome(){
   show('Building overview…');
   const idx=await loadDateIndex();
@@ -279,17 +361,17 @@ async function renderHome(){
   const pwA=await agg(pwStart,pwEnd);
   const exp=await loadExpenditure();
   const mE=expByCat(exp,mStart,mEnd), pE=expByCat(exp,pStart,pEnd), wE=expByCat(exp,wStart,wEnd), pwE=expByCat(exp,pwStart,pwEnd);
-  show('Reading pending payments…');
-  const weeks=await loadInvoiceRows(); await loadInvoiceFills(weeks);
   hide();
+  // Pending-payments list moved to the Income page (it needs a per-cell colour scan, which is the
+  // slowest part of the old Home page — Home now only does the 4 aggregate reads above).
 
   const monthName=today.toLocaleString('en-GB',{month:'long',year:'numeric'});
   function kpi(l,v,t){ return `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${t||''}</div>`; }
   function pcTable(a,pa){
     if(!a) return '<p class="muted">No data yet.</p>';
-    const rows=Object.values(a.byPC).filter(x=>x.plan||x.sold).sort((x,y)=>y.sales-x.sales);
-    return `<div style="overflow-x:auto"><table><tr><th>Client</th><th>Product</th><th class="num">Deliv.</th><th class="num">Sold</th><th class="num">Ret %</th><th class="num">Sales TZS</th><th class="num">% of sales</th></tr>
-    ${rows.map(x=>`<tr><td>${esc(x.client)}</td><td>${esc(x.product)}</td><td class="num">${fmt(x.plan)}</td><td class="num">${fmt(x.sold)}</td><td class="num">${pct(x.ret,x.plan).toFixed(0)}%</td><td class="num">${fmt(x.sales)}</td><td class="num">${pct(x.sales,a.sales).toFixed(1)}%</td></tr>`).join('')}</table></div>`;
+    const rows=Object.values(a.byClient).filter(x=>x.plan||x.sold).sort((x,y)=>y.sales-x.sales);
+    return `<div style="overflow-x:auto"><table><tr><th>Client</th><th class="num">Deliv.</th><th class="num">Sold</th><th class="num">Ret %</th><th class="num">Sales TZS</th><th class="num">% of sales</th></tr>
+    ${rows.map(x=>`<tr><td>${esc(x.name||x.client)}</td><td class="num">${fmt(x.plan)}</td><td class="num">${fmt(x.sold)}</td><td class="num">${pct(x.ret,x.plan).toFixed(0)}%</td><td class="num">${fmt(x.sales)}</td><td class="num">${pct(x.sales,a.sales).toFixed(1)}%</td></tr>`).join('')}</table></div>`;
   }
   function expTable(e,pe){
     const cats=Object.entries(e.cats).sort((a,b)=>b[1]-a[1]);
@@ -298,12 +380,6 @@ async function renderHome(){
     ${cats.map(([c,v])=>`<tr><td>${esc(c)}</td><td class="num">${fmt(v)}</td><td class="num">${pct(v,e.total).toFixed(0)}%</td><td class="num">${trendHtml(v,pe.cats[c],true)}</td></tr>`).join('')}
     <tr class="tot"><td>Total</td><td class="num">${fmt(e.total)}</td><td class="num">100%</td><td class="num">${trendHtml(e.total,pe.total,true)}</td></tr></table>`;
   }
-  const pending=[];
-  weeks.slice(-S.scanWeeks).forEach(w=>w.cols.forEach(col=>{
-    if(classifyFill(cache.invFills[`${w.totRow}_${col.c}`])==='pend' && col.amount>0) pending.push({week:w.label,name:col.name,amount:col.amount});
-  }));
-  const pendTot=pending.reduce((s,x)=>s+x.amount,0);
-
   M.innerHTML=`
   <div class="card"><h2>Month — ${monthName}</h2><div class="kpis">
     ${kpi('Projected deliveries',fmt(mA?.plan),trendHtml(mA?.plan,pA?.plan))}
@@ -312,7 +388,7 @@ async function renderHome(){
     ${kpi('Sales',fmtT(mA?.sales),trendHtml(mA?.sales,pA?.sales))}
     ${kpi('Expenditure',fmtT(mE.total),trendHtml(mE.total,pE.total,true))}
   </div></div>
-  <div class="card"><h2>Month — sales per product per client</h2>${pcTable(mA,pA)}</div>
+  <div class="card"><h2>Month — sales per client</h2>${pcTable(mA,pA)}</div>
   <div class="card"><h2>Month — expenditure by category</h2>${expTable(mE,pE)}</div>
   <div class="card"><h2>This week (${ymd(wStart)} → ${ymd(wEnd)})</h2><div class="kpis">
     ${kpi('Projected deliveries',fmt(wA?.plan),trendHtml(wA?.plan,pwA?.plan))}
@@ -321,18 +397,21 @@ async function renderHome(){
     ${kpi('Sales',fmtT(wA?.sales),trendHtml(wA?.sales,pwA?.sales))}
     ${kpi('Expenditure',fmtT(wE.total),trendHtml(wE.total,pwE.total,true))}
   </div></div>
-  <div class="card"><h2>This week — sales per product per client</h2>${pcTable(wA,pwA)}</div>
+  <div class="card"><h2>This week — sales per client</h2>${pcTable(wA,pwA)}</div>
   <div class="card"><h2>This week — expenditure by category</h2>${expTable(wE,pwE)}</div>
-  <div class="card"><h2>Pending payments (orange) — last ${S.scanWeeks} weeks</h2>
-    ${pending.length?`<table><tr><th>Week</th><th>Client</th><th class="num">TZS</th></tr>
-      ${pending.map(x=>`<tr><td>${esc(x.week)}</td><td>${esc(x.name)}</td><td class="num">${fmt(x.amount)}</td></tr>`).join('')}
-      <tr class="tot"><td colspan="2">Total receivable</td><td class="num">${fmt(pendTot)}</td></tr></table>`
-      :'<p class="muted">No pending (orange) payments in the scanned weeks. Mark them on the Invoices page.</p>'}
-  </div>`;
+  <p class="muted" style="text-align:center">Pending payments now live on the <b>Income</b> tab.</p>`;
 }
 
-/* ---------- DELIVERIES & RETURNS ---------- */
-let dWeek=null, dRows=null, dDirty={};
+/* ---------- DELIVERIES & RETURNS (item 4: lock Samples & Individual Client/Restaurant returns;
+   item 5: review box shows exactly what will be saved) ---------- */
+let dWeek=null, dRows=null, dDirty={}, dMeta={};
+function rowLock(x){
+  const type=String(x.type||'').trim().toLowerCase();
+  const ctype=String(x.ctype||'').trim().toLowerCase();
+  const isSample = type==='sample';
+  const isFixed  = ctype==='individual client' || ctype==='restaurant';
+  return isSample||isFixed ? (isSample?'sample':'fixed') : null;
+}
 async function renderDeliv(){
   const idx=await loadDateIndex();
   if(!dWeek) dWeek=monday(new Date());
@@ -340,18 +419,21 @@ async function renderDeliv(){
   show('Loading week…');
   const rr=rowsForRange(idx,dWeek,wEnd);
   dRows = rr ? await loadBlock(rr.r1,rr.r2) : [];
-  dDirty={};
+  dDirty={}; dMeta={};
   hide();
   const days={};
   dRows.forEach(x=>{ if(!x.date) return; const k=ymd(x.date); (days[k]=days[k]||[]).push(x); });
+  const writeAllowed = can('write');
   M.innerHTML=`
   <div class="card"><div class="row">
     <button class="btn sm sec" onclick="dWeek=addDays(dWeek,-7);renderDeliv()">◀ Prev</button>
     <div class="spacer" style="text-align:center;font-weight:600">${ymd(dWeek)} → ${ymd(wEnd)}</div>
     <button class="btn sm sec" onclick="dWeek=addDays(dWeek,7);renderDeliv()">Next ▶</button>
   </div>
-  <p class="muted" style="margin-top:8px">Edit <b>Deliveries</b> (plan, col G) and <b>Returns</b> (col H). Sold / Total are the Master's own formulas — read only. Changed cells turn orange until saved.</p>
-  <div class="row" style="margin-top:8px"><button class="btn" id="saveBtn" onclick="saveDeliv()" disabled>Save changes to Master</button><span id="saveMsg" class="muted"></span></div>
+  <p class="muted" style="margin-top:8px">Edit <b>Deliveries</b> (plan, col G) and <b>Returns</b> (col H). Sold / Total are the Master's own formulas — read only.
+  Rows marked <span class="pill un">Sample</span> or <span class="pill un">No returns</span> have Returns locked at 0, as agreed. Changed cells turn orange until saved.</p>
+  ${writeAllowed?`<div class="row" style="margin-top:8px"><button class="btn" id="saveBtn" onclick="saveDeliv()" disabled>Save changes to Master</button><span id="saveMsg" class="muted"></span></div>
+  <div id="reviewBox"></div>`:'<p class="muted">Your role (Viewer) can look but not edit. Ask an Admin/Editor to make changes.</p>'}
   </div>
   ${Object.keys(days).length? Object.entries(days).map(([k,rows],di)=>{
     const dayName=rows[0].day||new Date(k).toLocaleString('en-GB',{weekday:'long'});
@@ -362,100 +444,332 @@ async function renderDeliv(){
       <span class="muted">Deliv ${fmt(tot.p)} · Ret ${fmt(tot.r)} · Sold ${fmt(tot.sl)} · ${fmt(tot.tt)} TZS</span></div>
     <div id="day${di}" style="display:${di===((new Date().getDay()+6)%7)?'':'none'};overflow-x:auto">
     <table><tr><th>Client</th><th>Product</th><th class="num">Deliv (G)</th><th class="num">Ret (H)</th><th class="num">Sold</th><th class="num">Price</th><th class="num">Total</th></tr>
-    ${rows.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.product)}</td>
-      <td class="num"><input class="cell" type="number" min="0" value="${x.plan??''}" onchange="markDirty(${x.row},'G',this)"></td>
-      <td class="num"><input class="cell" type="number" min="0" value="${x.ret??''}" onchange="markDirty(${x.row},'H',this)"></td>
-      <td class="num">${fmt(x.sold)}</td><td class="num">${fmt(x.price)}</td><td class="num">${fmt(x.total)}</td></tr>`).join('')}
+    ${rows.map(x=>{
+      const lock=rowLock(x);
+      dMeta[x.row]={name:x.name,product:x.product};
+      const retCell = lock
+        // QC fix: this used to hardcode "0" regardless of what the Master actually holds. If an old
+        // row happened to have a non-zero Returned value from before this rule existed, showing a
+        // hardcoded 0 would misrepresent the real data (it's read-only so nothing gets corrected —
+        // it would just be a wrong number on screen). Show the real value; flag it if it isn't 0.
+        ? `<input class="cell locked" value="${x.ret??0}" readonly title="${lock==='sample'?'Sample — no returns':'No returns for this client type'}">${(Number(x.ret)||0)!==0?'<br><span class="pill pend" style="margin-top:2px">Master shows non-zero — check</span>':''}`
+        : `<input class="cell" type="number" min="0" value="${x.ret??''}" ${writeAllowed?`onchange="markDirty(${x.row},'H',this)"`:'readonly'}>`;
+      const planCell = `<input class="cell" type="number" min="0" value="${x.plan??''}" ${writeAllowed?`onchange="markDirty(${x.row},'G',this)"`:'readonly'}>`;
+      return `<tr><td>${esc(x.name)}${lock?`<br><span class="pill un" style="margin-top:2px">${lock==='sample'?'Sample':'No returns'}</span>`:''}</td><td>${esc(x.product)}</td>
+      <td class="num">${planCell}</td>
+      <td class="num">${retCell}</td>
+      <td class="num">${fmt(x.sold)}</td><td class="num">${fmt(x.price)}</td><td class="num">${fmt(x.total)}</td></tr>`;
+    }).join('')}
     </table></div></div>`;
   }).join('') : '<div class="card"><p class="muted">No rows found in the 2026 sheet for this week.</p></div>'}`;
+}
+function updateReviewBox(){
+  const box=document.getElementById('reviewBox'); if(!box) return;
+  const entries=Object.entries(dDirty);
+  if(!entries.length){ box.innerHTML=''; return; }
+  box.innerHTML=`<div class="review"><b>About to save ${entries.length} cell(s):</b><table>
+  <tr><th>Client</th><th>Product</th><th>Field</th><th class="num">New value</th></tr>
+  ${entries.map(([addr,val])=>{ const col=addr[0], row=addr.slice(1); const meta=dMeta[row]||{}; return `<tr><td>${esc(meta.name||'')}</td><td>${esc(meta.product||'')}</td><td>${col==='G'?'Deliveries':'Returns'}</td><td class="num">${val===null?'(blank)':fmt(val)}</td></tr>`; }).join('')}
+  </table></div>`;
 }
 function markDirty(row,col,el){
   el.classList.add('dirty');
   dDirty[col+row]=el.value===''?null:Number(el.value);
   document.getElementById('saveBtn').disabled=false;
+  updateReviewBox();
 }
 async function saveDeliv(){
+  if(!can('write')) return;
   const entries=Object.entries(dDirty);
   if(!entries.length) return;
   show(`Saving ${entries.length} cell(s) to the Master…`);
   const reqs=entries.map(([addr,val],i)=>({id:'w'+i,method:'PATCH',
-    url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='${addr}')`,
+    url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026')/range(address='${addr}')`,
     body:{values:[[val]]}}));
   const res=await gbatch(reqs);
   const fails=Object.values(res).filter(r=>r.status>=400);
   hide();
   if(fails.length){ alert(fails.length+' cell(s) failed to save. Check the file is not locked and retry.'); }
-  else { dDirty={}; await renderDeliv(); document.getElementById('saveMsg').textContent='✓ Saved '+new Date().toLocaleTimeString(); }
+  else { dDirty={}; await renderDeliv(); document.getElementById('saveMsg').textContent='✓ Saved by '+currentUser.name+' at '+new Date().toLocaleTimeString(); }
 }
 
-/* ---------- INVOICES & INCOME ---------- */
-async function renderInv(){
+/* ---------- INCOME (was "Invoices & Income" tab; item 6/7: renamed Income, now fully read-only —
+   the highlight colour is only ever set inside Excel by whoever marks a payment; the app just
+   displays it faithfully, it no longer writes fill colours). ---------- */
+async function renderIncome(){
   const weeks=await loadInvoiceRows();
   await loadInvoiceFills(weeks);
   hide();
   const recent=weeks.slice(-S.scanWeeks).reverse();
-  M.innerHTML=`<div class="card"><h2>Invoices & income</h2>
-  <p class="muted">Numbers are read-only. Tap an amount to cycle: unmarked → <span class="pill paid">paid</span> → <span class="pill pend">pending</span> → unmarked. The colour is written to the Master immediately.</p>
-  <label>Weeks shown / scanned</label><select onchange="S.scanWeeks=+this.value;LSset('scanWeeks',this.value);cache.invFills={};renderInv()">
+  const pending=[];
+  recent.forEach(w=>w.cols.forEach(col=>{
+    if(classifyFill(cache.invFills[`${w.totRow}_${col.c}`])==='pend' && col.amount>0) pending.push({week:w.label,name:col.name,amount:col.amount});
+  }));
+  const pendTot=pending.reduce((s,x)=>s+x.amount,0);
+  M.innerHTML=`<div class="card"><h2>Income</h2>
+  <p class="muted">Read-only — this mirrors the [Invoices & Income] sheet exactly, including its green (paid) / orange (pending) highlight. To mark something paid, do it in Excel; the app will show it on next Sync.</p>
+  <label>Weeks shown</label><select onchange="S.scanWeeks=+this.value;LSset('scanWeeks',this.value);cache.invFills={};renderIncome()">
   ${[6,10,16,26,52].map(n=>`<option ${n===S.scanWeeks?'selected':''}>${n}</option>`).join('')}</select></div>
+  <div class="card"><h2>Pending payments (orange) — last ${S.scanWeeks} weeks</h2>
+    ${pending.length?`<table><tr><th>Week</th><th>Client</th><th class="num">TZS</th></tr>
+      ${pending.map(x=>`<tr><td>${esc(x.week)}</td><td>${esc(x.name)}</td><td class="num">${fmt(x.amount)}</td></tr>`).join('')}
+      <tr class="tot"><td colspan="2">Total receivable</td><td class="num">${fmt(pendTot)}</td></tr></table>`
+      :'<p class="muted">No pending (orange) payments in the scanned weeks.</p>'}
+  </div>
   ${recent.map(w=>`<div class="card"><h3 class="wk" style="margin-top:0">${esc(w.label)} — total ${fmtT(w.total)}</h3>
   <div style="overflow-x:auto"><table><tr><th>Client</th><th>Invoice</th><th class="num">TZS</th><th>Status</th></tr>
   ${w.cols.filter(c=>c.amount>0).map(col=>{
     const key=`${w.totRow}_${col.c}`, st=classifyFill(cache.invFills[key]);
     return `<tr><td>${esc(col.name)}</td><td class="muted">${esc(col.inv&&col.inv!==col.name?col.inv:'')}</td>
-    <td class="num"><span class="inv-cell ${st}" id="ic_${key}" onclick="cycleFill(${w.totRow},${col.c})">${fmt(col.amount)}</span></td>
-    <td><span class="pill ${st}" id="pl_${key}">${st==='paid'?'Paid':st==='pend'?'Pending':'—'}</span></td></tr>`;
+    <td class="num">${fmt(col.amount)}</td>
+    <td><span class="pill ${st}">${st==='paid'?'Paid':st==='pend'?'Pending':'—'}</span></td></tr>`;
   }).join('')}</table></div></div>`).join('')}`;
 }
-async function cycleFill(totRow,c){
-  const key=`${totRow}_${c}`, cur=classifyFill(cache.invFills[key]);
-  const next= cur==='un'?'paid': cur==='paid'?'pend':'un';
-  const addr=colLetter(c)+totRow;
-  const base=`${WB()}/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${addr}')/format/fill`;
-  show('Updating Master…');
+
+/* ---------- INVOICES (item 7: new page — weekly summaries + receipt verification, all read-only) ---------- */
+async function renderInvoices(){
+  hide();
+  M.innerHTML=`<div class="card"><h2>Invoices</h2>
+  <p class="muted">This page is for checking numbers and generating/verifying weekly retailer invoices. It is read-only — any correction must be made on the Deliveries page (or in Excel), then re-synced.</p></div>
+  <div class="card"><h2>Generate receipts</h2>
+  <p class="muted">A web app cannot start a program on your computer for security reasons, so the buttons below can't literally run the .bat files. Double-click the file on your Desktop as usual, then use the list below to verify the PDFs it produced.</p>
+  ${[['Shoppers','Generate_Weekly_Shoppers_Receipts.bat'],['Village','Generate_Weekly_Village_Receipts.bat'],['Butcher','Generate_Weekly_Butcher_Receipts.bat']].map(([n,f])=>
+    `<div class="row" style="margin-bottom:8px"><b style="min-width:80px">${n}</b><span class="muted">Receipts\\${f}</span></div>`).join('')}
+  </div>
+  <div class="card"><h2>Weekly summaries (this week)</h2>
+  <p class="muted">Pulled from the Shoppers Receipts / Village Receipts / Butcher Receipts sheets (the same clean weekly data the receipt scripts use) rather than the daily working sheets, for reliability.</p>
+  <div id="invSummary">Loading…</div></div>
+  <div class="card"><h2>Last Monday's generated receipts</h2><div id="invPdfList">Loading…</div></div>`;
+  await loadInvoiceSummaries();
+  await loadReceiptPdfs();
+}
+async function loadInvoiceSummaries(){
+  // QC fix: the first version of this only confirmed "a row exists this week" and punted the
+  // actual numbers to Excel Online — that is not a summary, it doesn't meet request 7a. This
+  // version reads every branch row for the current week and totals Delivered/Returned/Sold/Sales
+  // per product across Day1-7, the same Sold = Delivered - Returned logic generate_receipts.py uses.
+  const PRODUCTS=['BigLoaves','Baguette','SmallLoaves','Focaccia'];
+  const box=document.getElementById('invSummary');
   try{
-    if(next==='un'){ await g(base+'/clear',{method:'POST'}); cache.invFills[key]=null; }
-    else { await g(base,{method:'PATCH',body:JSON.stringify({color: next==='paid'?PAID:PEND})}); cache.invFills[key]= next==='paid'?PAID:PEND; }
-    const st=classifyFill(cache.invFills[key]);
-    const el=document.getElementById('ic_'+key), pl=document.getElementById('pl_'+key);
-    el.className='inv-cell '+st; pl.className='pill '+st; pl.textContent= st==='paid'?'Paid':st==='pend'?'Pending':'—';
-  } finally { hide(); }
+    const sections=[];
+    for(const sheet of ['Shoppers Receipts','Village Receipts','Butcher Receipts']){
+      show('Reading '+sheet+'…');
+      const r=await g(wsRange(sheet,'A1:BZ400')+'?$select=values');
+      const V=r.values||[]; if(!V.length){ sections.push({sheet,rows:[]}); continue; }
+      const header=V[0];
+      const col=name=>header.indexOf(name);
+      const wsIdx=col('Week_Start_Date'), branchIdx=col('Client_Branch')>=0?col('Client_Branch'):col('Client_Name');
+      const today=new Date(); const wStart=monday(today);
+      const rows=[];
+      for(let i=1;i<V.length;i++){
+        const row=V[i]; const d=excelDate(row[wsIdx]);
+        if(!d || ymd(d)!==ymd(wStart)) continue;
+        const perProduct=PRODUCTS.map(p=>{
+          const priceIdx=col(p+'_Price'); if(priceIdx<0) return null; // product not sold at this retailer
+          let delivered=0, returned=0;
+          for(let day=1;day<=7;day++){
+            const dIdx=col(`Day${day}_${p}`), rIdx=col(`Day${day}_Return_${p}`);
+            if(dIdx>=0) delivered+=Number(row[dIdx])||0;
+            if(rIdx>=0) returned+=Number(row[rIdx])||0;
+          }
+          const sold=delivered-returned, price=Number(row[priceIdx])||0;
+          return {product:p, delivered, returned, sold, sales:sold*price};
+        }).filter(Boolean);
+        rows.push({branch:row[branchIdx]||'', products:perProduct});
+      }
+      sections.push({sheet,rows});
+    }
+    hide();
+    box.innerHTML = sections.map(s=>{
+      if(!s.rows.length) return `<h3 class="wk">${esc(s.sheet)}</h3><p class="muted">No row for this week yet.</p>`;
+      return s.rows.map(r=>{
+        const wkTotal=r.products.reduce((a,p)=>a+p.sales,0);
+        return `<h3 class="wk">${esc(s.sheet)} — ${esc(r.branch)}</h3>
+        <div style="overflow-x:auto"><table><tr><th>Product</th><th class="num">Delivered</th><th class="num">Returned</th><th class="num">Sold</th><th class="num">Sales TZS</th></tr>
+        ${r.products.map(p=>`<tr><td>${p.product}</td><td class="num">${fmt(p.delivered)}</td><td class="num">${fmt(p.returned)}</td><td class="num">${fmt(p.sold)}</td><td class="num">${fmt(p.sales)}</td></tr>`).join('')}
+        <tr class="tot"><td colspan="4">Week total</td><td class="num">${fmt(wkTotal)}</td></tr></table></div>`;
+      }).join('');
+    }).join('') || '<p class="muted">No data.</p>';
+  }catch(e){ hide(); box.innerHTML=`<div class="err">${esc(e.message)}</div>`; }
+}
+async function loadReceiptPdfs(){
+  const box=document.getElementById('invPdfList');
+  try{
+    show("Finding last Monday's PDFs…");
+    const folders=['Shoppers_Receipts_2026','Village_Receipts_2026','Butcher_Receipts_2026'];
+    let html='';
+    for(const name of folders){
+      const r=await g(`/me/drive/root/search(q='${encodeURIComponent(name)}')?$select=id,name,folder&$top=5`);
+      const hit=(r.value||[]).find(x=>x.folder && x.name===name);
+      if(!hit){ html+=`<p class="muted">${name}: folder not found.</p>`; continue; }
+      const kids=await g(`/me/drive/items/${hit.id}/children?$select=name,webUrl,lastModifiedDateTime,folder&$orderby=lastModifiedDateTime desc&$top=15`);
+      const pdfs=(kids.value||[]).filter(x=>!x.folder && x.name.toLowerCase().endsWith('.pdf'));
+      html+=`<h3 class="wk">${name}</h3>${pdfs.length?pdfs.map(f=>`<a class="filelink" href="${f.webUrl}" target="_blank">📄 ${esc(f.name)}<small>Modified ${f.lastModifiedDateTime?.slice(0,10)||''}</small></a>`).join(''):'<p class="muted">No PDFs found (recurse into invoice sub-folders manually if needed).</p>'}`;
+    }
+    hide(); box.innerHTML=html;
+  }catch(e){ hide(); box.innerHTML=`<div class="err">${esc(e.message)}</div>`; }
 }
 
-/* ---------- STAFF ---------- */
+/* cycleFill/renderInv_OLD removed: Income is now read-only by design (item 6/7/8) — the app never
+   writes fill colours any more. Mark payments paid/pending directly in Excel. */
+
+/* ---------- EXPENSES (item 8: add entries like the Excel [2026 Expenditure] sheet, current month
+   only; saved rows become read-only). The sheet is pre-formatted a few rows ahead with the Date
+   already filled in and the Total column already holding =PRODUCT(Price,VAT) — we only ever fill
+   in the blank cells of the NEXT ready row, never touch the Date/Total formula unless the date
+   needs correcting, and never write a literal 0 into VAT (Excel's PRODUCT() ignores a blank VAT
+   cell but treats a literal 0 as "multiply by zero", which would zero out the Total). ---------- */
+const EXP_CATS=['Company Assets','Salaries','Materials','Bakery Provisions','Utilities','Maintance','Taxes'];
+let expRowMeta=null;
+async function renderExpenses(){
+  show('Reading this month’s expenses…');
+  const r=await g(wsRange('2026 Expenditure','A1:J1600')+'?$select=values');
+  hide();
+  const V=r.values||[];
+  const today=new Date(); const mStart=new Date(today.getFullYear(),today.getMonth(),1), mEnd=new Date(today.getFullYear(),today.getMonth()+1,0);
+  const monthName=today.toLocaleString('en-GB',{month:'long',year:'numeric'});
+  const filled=[], blanks=[];
+  for(let i=1;i<V.length;i++){
+    const row=V[i]; const d=excelDate(row[0]);
+    if(!d || d<mStart || d>mEnd) continue;
+    const rowNum=i+1;
+    if(row[1]){ filled.push({rowNum,row,d}); } else { blanks.push({rowNum,row,d}); }
+  }
+  expRowMeta = blanks.length? blanks[0] : null;
+  const writeAllowed=can('write');
+  M.innerHTML=`<div class="card"><h2>Expenses — ${monthName}</h2>
+  <p class="muted">Shows only the current month, like the Excel sheet. Once an entry is saved it becomes read-only here — correct mistakes in Excel.</p>
+  ${filled.length?`<div style="overflow-x:auto"><table><tr><th>Date</th><th>Type</th><th>Provider</th><th>Detail</th><th class="num">Price</th><th class="num">VAT</th><th class="num">Total</th><th>Receipt</th><th>TIN/VRN</th><th>How</th></tr>
+  ${filled.map(f=>`<tr><td>${ymd(f.d)}</td><td>${esc(f.row[1]||'')}</td><td>${esc(f.row[2]||'')}</td><td>${esc(f.row[3]||'')}</td><td class="num">${fmt(f.row[4])}</td><td class="num">${fmt(f.row[5])}</td><td class="num">${fmt(f.row[6])}</td><td>${esc(f.row[7]||'')}</td><td>${esc(f.row[8]||'')}</td><td>${esc(f.row[9]||'')}</td></tr>`).join('')}
+  <tr class="tot"><td colspan="6">Total this month</td><td class="num">${fmt(filled.reduce((s,f)=>s+(Number(f.row[6])||0),0))}</td><td colspan="2"></td></tr>
+  </table></div>`:'<p class="muted">No expenses recorded yet this month.</p>'}
+  </div>
+  <div class="card"><h2>Add new expense</h2>
+  ${!writeAllowed?'<p class="muted">Your role (Viewer) can’t add expenses.</p>': !expRowMeta ? `<p class="err">No blank pre-formatted row is ready for ${monthName} in the Master's [2026 Expenditure] sheet yet. In Excel, copy the last row's formula down a few more rows, save, then come back and Sync.</p>` : `
+  ${ymd(expRowMeta.d)!==ymd(today)?`<p class="muted">Note: the next ready row in the Master was originally pre-dated ${ymd(expRowMeta.d)} (the template hasn't been extended past there yet) — the date below defaults to today instead; change it if this expense is actually for a different day.</p>`:''}
+  <label>Date</label><input id="exDate" type="date" value="${ymd(today)}">
+  <label>Type of expenditure</label><select id="exType">${EXP_CATS.map(c=>`<option>${c}</option>`).join('')}</select>
+  <label>Provider</label><input id="exProvider" placeholder="e.g. Theresia Joseph">
+  <label>Product / detail</label><input id="exDetail" placeholder="e.g. Flour 50kg">
+  <div class="row"><div style="flex:1"><label>Price before TAX</label><input id="exPrice" type="number" min="0"></div><div style="flex:1"><label>VAT Tax (leave blank if none)</label><input id="exVat" type="number" min="0" placeholder="blank = none"></div></div>
+  <label>Receipt n.</label><input id="exReceipt" placeholder="e.g. Hand Receipt">
+  <label>TIN/VRN</label><input id="exTin" placeholder="e.g. No">
+  <label>How (payment method)</label><input id="exHow" placeholder="e.g. TigoPesa, Cash, Bank Transfer">
+  <div class="row" style="margin-top:10px"><button class="btn" onclick="saveExpense(${expRowMeta.rowNum})">Save (row ${expRowMeta.rowNum} in Master)</button></div>
+  `}
+  </div>`;
+}
+async function saveExpense(rowNum){
+  const dateStr=document.getElementById('exDate').value;
+  const type=document.getElementById('exType').value;
+  const provider=document.getElementById('exProvider').value.trim();
+  const detail=document.getElementById('exDetail').value.trim();
+  const price=Number(document.getElementById('exPrice').value)||0;
+  const vatRaw=document.getElementById('exVat').value.trim();
+  const receipt=document.getElementById('exReceipt').value.trim();
+  const tin=document.getElementById('exTin').value.trim();
+  const how=document.getElementById('exHow').value.trim();
+  if(!provider||!price){ alert('Provider and Price are required.'); return; }
+  const vatMsg = vatRaw===''?'no VAT':fmtT(Number(vatRaw));
+  if(!confirm(`Save this expense to row ${rowNum} of the Master?\n\n${type} — ${provider} — ${detail}\nPrice ${fmtT(price)}, ${vatMsg}`)) return;
+  show('Saving expense…');
+  // QC fix: building this from new Date(dateStr+'T00:00:00') and dividing by 86400000 only gave the
+  // right day by coincidence in Dar es Salaam's UTC+3 (rounding masked the offset); it would have
+  // silently saved the WRONG DATE in a negative-UTC-offset timezone. Parse the Y/M/D directly and use
+  // Date.UTC so the serial matches excelDate()'s own UTC-midnight assumption regardless of device timezone.
+  const [exY,exM,exD]=dateStr.split('-').map(Number);
+  const excelSerial=Math.round(Date.UTC(exY,exM-1,exD)/86400000)+25569;
+  const reqs=[
+    {id:'a',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='A${rowNum}')`,body:{values:[[excelSerial]]}},
+    {id:'b',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='B${rowNum}:D${rowNum}')`,body:{values:[[type,provider,detail]]}},
+    {id:'c',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='E${rowNum}')`,body:{values:[[price]]}},
+    {id:'e',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='H${rowNum}:J${rowNum}')`,body:{values:[[receipt,tin,how]]}}
+  ];
+  if(vatRaw!=='') reqs.push({id:'d',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='F${rowNum}')`,body:{values:[[Number(vatRaw)]]}});
+  const res=await gbatch(reqs);
+  const fails=Object.values(res).filter(r=>r.status>=400);
+  hide();
+  if(fails.length){ alert(fails.length+' field(s) failed to save. Check the file is not locked and retry.'); }
+  else { cache.exp=null; await renderExpenses(); }
+}
+
+/* ---------- SCHEDULE (was "Staff"; item 9: renamed + only current month's timetable shown) ---------- */
 async function renderStaff(){
-  show('Loading timetables…');
+  show('Loading this month’s timetable…');
   let files=[];
   if(S.tfolderId){
-    const r=await g(`${folderItemPath()}/children?$select=name,webUrl,lastModifiedDateTime&$orderby=name`);
+    const r=await g(`/me/drive/items/${S.tfolderId}/children?$select=name,webUrl,lastModifiedDateTime&$orderby=name`);
     files=r.value||[];
   }
   hide();
-  M.innerHTML=`<div class="card"><h2>Staff — schedules & timetables</h2>
+  const monthName=new Date().toLocaleString('en-GB',{month:'long'}), year=new Date().getFullYear();
+  const wanted=(monthName+String(year)).toLowerCase();
+  const thisMonth=files.filter(f=>f.name.toLowerCase().replace(/[^a-z0-9]/g,'').includes(wanted.replace(/[^a-z0-9]/g,'')));
+  const shown=thisMonth.length?thisMonth:files; // fallback: if naming doesn't match, show everything rather than nothing
+  M.innerHTML=`<div class="card"><h2>Schedule</h2>
   ${!S.tfolderId?'<p class="muted">Timetables folder not linked yet — go to Settings → Find timetables folder.</p>':
-  files.length? files.map(f=>`<a class="filelink" href="${f.webUrl}" target="_blank">📄 ${esc(f.name)}<small>Modified ${f.lastModifiedDateTime?.slice(0,10)||''}</small></a>`).join('')
+  shown.length? shown.map(f=>`<a class="filelink" href="${f.webUrl}" target="_blank">📄 ${esc(f.name)}<small>Modified ${f.lastModifiedDateTime?.slice(0,10)||''}</small></a>`).join('')
   :'<p class="muted">Folder is empty.</p>'}
+  ${!thisMonth.length && files.length?`<p class="muted" style="margin-top:8px">Couldn't match a file named for ${esc(monthName)} ${year} by name, so showing everything in the folder instead.</p>`:''}
   <p class="muted" style="margin-top:10px">Files open read-only in Excel/Word online in a new tab.</p></div>`;
+}
+
+/* ---------- CALENDAR (item 10: simple link, no embedded OAuth) ---------- */
+function renderCalendar(){
+  hide();
+  M.innerHTML=`<div class="card" style="text-align:center;padding:30px 20px">
+  <h2 style="border:none">Calendar</h2>
+  <p class="muted" style="margin-bottom:16px">Opens your Massimo Italian Bread Google Calendar in a new tab (massimoitalianbreadtz@gmail.com). Compliance reminders (PAYE, WCF, VAT, BRELA, TBS) already live there.</p>
+  <a class="btn" style="text-decoration:none;display:inline-block" href="https://calendar.google.com/calendar/u/0/r/week" target="_blank">Open this week's calendar ↗</a>
+  </div>`;
 }
 
 /* ---------- SETTINGS ---------- */
 function renderSettings(){
   hide();
+  // QC fix: bootstrapping (first-ever run, before any user/PIN exists) must stay fully open, but
+  // once currentUser exists, a Viewer should not be able to relink the Master file, change the
+  // Client ID, or sign the device out — that's an Admin/Editor action.
+  const bootstrapping = !S.clientId || !S.fileId;
+  const settingsWriteAllowed = bootstrapping || can('write');
   M.innerHTML=`<div class="card"><h2>Setup</h2>
+  ${!settingsWriteAllowed?'<p class="muted">Your role (Viewer) can see Setup but not change it.</p>':''}
   <label>1. Azure App Client ID (from SETUP_GUIDE.md, step 1)</label>
-  <input id="cid" value="${esc(S.clientId||'')}" placeholder="e.g. 1a2b3c4d-....">
-  <div class="row" style="margin-top:8px"><button class="btn sm" onclick="S.clientId=document.getElementById('cid').value.trim();LSset('clientId',S.clientId);location.reload()">Save Client ID</button></div>
+  <input id="cid" value="${esc(S.clientId||'')}" placeholder="e.g. 1a2b3c4d-...." ${settingsWriteAllowed?'':'disabled'}>
+  <div class="row" style="margin-top:8px"><button class="btn sm" ${settingsWriteAllowed?'':'disabled'} onclick="S.clientId=document.getElementById('cid').value.trim();LSset('clientId',S.clientId);location.reload()">Save Client ID</button></div>
   <label>2. Master Excel file ${S.fileId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
-  <button class="btn sm sec" onclick="findFile()">Find Salty_Water_2026_Master.xlsx</button>
-  <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the file</label><input id="shareUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkByShareUrl()">Link it</button></div>
+  <button class="btn sm sec" ${settingsWriteAllowed?'':'disabled'} onclick="findFile()">Find Salty_Water_2026_Master.xlsx</button>
   <label>3. Timetables folder ${S.tfolderId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
-  <button class="btn sm sec" onclick="findFolder()">Find "Schedules and Timetables" folder</button>
-  <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the folder</label><input id="shareFolderUrl" placeholder="https://1drv.ms/..."><button class="btn sm sec" style="margin-top:6px" onclick="linkFolderByShareUrl()">Link it</button></div>
+  <button class="btn sm sec" ${settingsWriteAllowed?'':'disabled'} onclick="findFolder()">Find "Schedules and Timetables" folder</button>
   <div id="setout" style="margin-top:10px"></div>
   <label>Account</label>
   <p class="muted">${account?('Signed in as '+esc(account.username)+' — '):'Not signed in. '}</p>
-  <div class="row">${account?'<button class="btn sm sec" onclick="msalApp.logoutRedirect()">Sign out</button>':(S.clientId?'<button class="btn sm" onclick="login()">Sign in</button>':'')}</div>
-  <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, and set cell colours on the [Invoices & Income] sheet. Everything else is read-only by design. It never deletes rows, never edits formulas, never touches other sheets.</p></div>`;
+  <div class="row">${account?`<button class="btn sm sec" ${settingsWriteAllowed?'':'disabled'} onclick="msalApp.logoutRedirect()">Sign out</button>`:(S.clientId?'<button class="btn sm" onclick="login()">Sign in</button>':'')}</div>
+  </div>
+  ${currentUser && can('manageUsers') ? renderUserAdmin() : ''}
+  <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, add data to blank pre-formatted rows on the [2026 Expenditure] sheet, and read (never write) everything else. It never deletes rows, never edits formulas, never touches other sheets. It no longer writes cell colours — Income is read-only.</p></div>`;
+}
+/* ---------- USER ADMIN (item 1, Admin-only) ---------- */
+function renderUserAdmin(){
+  const users=getUsers();
+  return `<div class="card"><h2>Users on this device</h2>
+  <p class="muted">Name + PIN + role, stored only on this device/browser. Set the same list up on every staff device during install so names/PINs match everywhere. This is for accountability, not Microsoft-level security — everyone still shares the one OneDrive connection above.</p>
+  ${users.map((u,i)=>`<div class="row" style="margin-bottom:6px"><div style="flex:1">${esc(u.name)} <span class="muted">(${ROLES[u.role]?.label||u.role}, PIN ${esc(u.pin)})</span></div><button class="btn sm sec" onclick="removeUser(${i})">Remove</button></div>`).join('')||'<p class="muted">No users yet.</p>'}
+  <label style="margin-top:12px">Add user</label>
+  <div class="row"><input id="nuName" placeholder="Name" style="flex:2"><input id="nuPin" placeholder="4-digit PIN" maxlength="4" inputmode="numeric" style="flex:1">
+  <select id="nuRole" style="flex:1"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
+  <button class="btn sm" onclick="addUser()">Add</button></div>
+  </div>`;
+}
+function addUser(){
+  const name=document.getElementById('nuName').value.trim(), pin=document.getElementById('nuPin').value.trim(), role=document.getElementById('nuRole').value;
+  if(!name||pin.length<4){ alert('Enter a name and a 4-digit PIN.'); return; }
+  const users=getUsers(); users.push({name,pin,role}); setUsers(users); renderSettings();
+}
+function removeUser(i){
+  const users=getUsers(); const u=users[i];
+  if(!confirm('Remove '+u.name+'?')) return;
+  users.splice(i,1); setUsers(users); renderSettings();
 }
 async function findFile(){
   const o=document.getElementById('setout'); o.innerHTML='Searching…';
@@ -463,47 +777,31 @@ async function findFile(){
   const hits=(r.value||[]).filter(x=>x.name.toLowerCase().endsWith('.xlsx'));
   if(!hits.length){ o.innerHTML='<div class="err">Not found in this OneDrive. Is this the right Microsoft account?</div>'; return; }
   o.innerHTML=hits.map((h,i)=>`<div class="row" style="margin-bottom:6px"><div style="flex:1;font-size:13px">${esc(h.name)}<br><small class="muted">${esc(h.parentReference?.path?.replace('/drive/root:','')||'')}</small></div>
-  <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};S.fileDriveId=${JSON.stringify(h.parentReference&&h.parentReference.driveId||null)};LSset("fileId",S.fileId);LSset("fileDriveId",S.fileDriveId||"");renderSettings()'>Use this</button></div>`).join(''); }
-async function linkByShareUrl(){
-    const o=document.getElementById('setout'); const input=(document.getElementById('shareUrl').value||'').trim();
-    if(!input){ o.innerHTML='<div class="err">Paste a link first.</div>'; return; }
-    o.innerHTML='Resolving link…';
-    try{
-          const b64=btoa(input).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
-          const item=await g(`/shares/u!${b64}/driveItem?$select=id,name,parentReference,webUrl`);
-          if(!item.name.toLowerCase().endsWith('.xlsx')){ o.innerHTML='<div class="err">That link is not an .xlsx file: '+esc(item.name)+'</div>'; return; }
-          S.fileId=item.id; S.fileDriveId=(item.parentReference&&item.parentReference.driveId)||null; LSset('fileId',S.fileId); LSset('fileDriveId',S.fileDriveId||''); renderSettings();
-    }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
+  <button class="btn sm" onclick='S.fileId=${JSON.stringify(h.id)};LSset("fileId",S.fileId);renderSettings()'>Use this</button></div>`).join('');
 }
-  
 async function findFolder(){
   const o=document.getElementById('setout'); o.innerHTML='Searching…';
   const r=await g(`/me/drive/root/search(q='Schedules and Timetables')?$select=id,name,folder,parentReference&$top=10`);
   const hits=(r.value||[]).filter(x=>x.folder);
   if(!hits.length){ o.innerHTML='<div class="err">Folder not found.</div>'; return; }
   o.innerHTML=hits.map(h=>`<div class="row" style="margin-bottom:6px"><div style="flex:1;font-size:13px">📁 ${esc(h.name)}<br><small class="muted">${esc(h.parentReference?.path?.replace('/drive/root:','')||'')}</small></div>
-  <button class="btn sm" onclick='S.tfolderId=${JSON.stringify(h.id)};S.tfolderDriveId=${JSON.stringify(h.parentReference&&h.parentReference.driveId||null)};LSset("tfolderId",S.tfolderId);LSset("tfolderDriveId",S.tfolderDriveId||"");renderSettings()'>Use this</button></div>`).join('');
-}
-async function linkFolderByShareUrl(){
-    const o=document.getElementById('setout'); const input=(document.getElementById('shareFolderUrl').value||'').trim();
-    if(!input){ o.innerHTML='<div class="err">Paste a link first.</div>'; return; }
-    o.innerHTML='Resolving link…';
-    try{
-          const b64=btoa(input).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
-          const item=await g(`/shares/u!${b64}/driveItem?$select=id,name,folder,parentReference,webUrl`);
-          if(!item.folder){ o.innerHTML='<div class="err">That link is not a folder: '+esc(item.name)+'</div>'; return; }
-          S.tfolderId=item.id; S.tfolderDriveId=(item.parentReference&&item.parentReference.driveId)||null; LSset('tfolderId',S.tfolderId); LSset('tfolderDriveId',S.tfolderDriveId||''); renderSettings();
-    }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
+  <button class="btn sm" onclick='S.tfolderId=${JSON.stringify(h.id)};LSset("tfolderId",S.tfolderId);renderSettings()'>Use this</button></div>`).join('');
 }
 
 /* ---------- SYNC & BOOT ---------- */
 async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:{},monthBlocks:{}}; await render(); }
 (async function boot(){
-  // PWA manifest for "install to home screen"
+  // PWA manifest for "install to home screen" (item 3b: Android uses manifest icons; iOS Safari
+  // ignores the manifest for the home-screen icon and needs its own apple-touch-icon link tag).
   document.getElementById('logoimg').src=LOGO;
-  const man={name:'Massimo Admin',short_name:'Massimo',start_url:location.href,display:'standalone',background_color:'#FAF5F0',theme_color:'#A71B1B',icons:[{src:LOGO,sizes:'280x212',type:'image/png'}]};
+  const man={name:'Massimo Italian Bread — Admin',short_name:'Massimo',start_url:location.href,display:'standalone',background_color:'#FFFDFD',theme_color:'#A71B1B',
+    icons:[{src:LOGO,sizes:'280x212',type:'image/png',purpose:'any'}]};
   document.getElementById('manifest').href='data:application/manifest+json,'+encodeURIComponent(JSON.stringify(man));
+  const appleIcon=document.createElement('link'); appleIcon.rel='apple-touch-icon'; appleIcon.href=LOGO; document.head.appendChild(appleIcon);
+  const appleTitle=document.createElement('meta'); appleTitle.name='apple-mobile-web-app-title'; appleTitle.content='Massimo'; document.head.appendChild(appleTitle);
+  const appleCap=document.createElement('meta'); appleCap.name='apple-mobile-web-app-capable'; appleCap.content='yes'; document.head.appendChild(appleCap);
   document.getElementById('nav').style.display='flex';
+  try{ currentUser = JSON.parse(sessionStorage.getItem('mib_curuser')||'null'); }catch(e){ currentUser=null; }
   if(!initMsal()){ go('set'); return; }
   try{
     const resp=await msalApp.handleRedirectPromise();
