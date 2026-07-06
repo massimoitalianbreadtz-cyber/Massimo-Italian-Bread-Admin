@@ -104,7 +104,7 @@ const LOGO='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAARgAAADUCAYAAABH0zz3AA
 const LS = k => localStorage.getItem('mib_'+k);
 const LSset = (k,v) => localStorage.setItem('mib_'+k, v);
 let msalApp=null, account=null, token=null;
-let S = { fileId: LS('fileId'), tfolderId: LS('tfolderId'), clientId: LS('clientId'), scanWeeks: parseInt(LS('scanWeeks')||'10') };
+let S = { fileId: LS('fileId'), tfolderId: LS('tfolderId'), clientId: LS('clientId'), pdfFolders: JSON.parse(LS('pdfFolders')||'{}') };
 
 /* ================= USERS & ROLES (item 1) =================
    This is a lightweight, DEVICE-LOCAL name+PIN layer for accountability, NOT a Microsoft-level
@@ -125,7 +125,7 @@ function can(action){ // action: 'write' | 'manageUsers'
   return action==='manageUsers' ? r.canManageUsers : r.canWrite;
 }
 const PAID='#92D050', PEND='#FFC000';
-let cache = { dateIndex:null, exp:null, invRows:null, invFills:{}, monthBlocks:{} };
+let cache = { dateIndex:null, exp:null, invRows:null, invFills:{}, monthBlocks:{}, pdfLatest:null, recInv:null };
 const GRAPH='https://graph.microsoft.com/v1.0';
 const fmt = n => (n==null||isNaN(n))?'—':Math.round(n).toLocaleString('en-US');
 const fmtT = n => fmt(n)+' TZS';
@@ -241,10 +241,11 @@ async function loadInvoiceRows(force){
   cache.invRows=weeks; return weeks;
 }
 function colLetter(c0){ return String.fromCharCode(65+c0); } // cols 0..13 -> A..N
+// Fix (Gu, 2026-07-06): used to always slice its own "last N weeks" internally (tied to the dropdown
+// that's now removed). Caller now decides exactly which weeks to fetch fills for.
 async function loadInvoiceFills(weeks,force){
-  const recent=weeks.slice(-S.scanWeeks);
   const reqs=[];
-  recent.forEach(w=>w.cols.forEach(col=>{
+  weeks.forEach(w=>w.cols.forEach(col=>{
     const key=`${w.totRow}_${col.c}`;
     if(force || !(key in cache.invFills))
       reqs.push({id:key,method:'GET',url:`/me/drive/items/${S.fileId}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
@@ -363,10 +364,21 @@ async function renderHome(){
   show('Building overview…');
   const idx=await loadDateIndex();
   const today=new Date(); today.setHours(0,0,0,0);
-  const mStart=new Date(today.getFullYear(),today.getMonth(),1), mEnd=new Date(today.getFullYear(),today.getMonth()+1,0);
-  const pStart=new Date(today.getFullYear(),today.getMonth()-1,1), pEnd=new Date(today.getFullYear(),today.getMonth(),0);
-  const wStart=monday(today), wEnd=addDays(wStart,6);
-  const pwStart=addDays(wStart,-7), pwEnd=addDays(wStart,-1);
+  const yesterday=addDays(today,-1);
+  // Fix (Gu, 2026-07-06): these used to run to the END of the month/week, showing days that
+  // haven't happened yet as if they were zeros. Now everything is cumulative THROUGH YESTERDAY,
+  // and the "previous period" comparison uses the SAME number of elapsed days (not the whole
+  // previous month/week), so the trend %s compare like-for-like.
+  const mStart=new Date(today.getFullYear(),today.getMonth(),1), mEndFull=new Date(today.getFullYear(),today.getMonth()+1,0);
+  const mEnd = yesterday<mStart ? addDays(mStart,-1) : (yesterday<mEndFull?yesterday:mEndFull);
+  const mDays = Math.max(0, Math.round((mEnd-mStart)/86400000)+1);
+  const pStart=new Date(today.getFullYear(),today.getMonth()-1,1), pEndFull=new Date(today.getFullYear(),today.getMonth(),0);
+  const pEnd = mDays<=0 ? addDays(pStart,-1) : addDays(pStart, Math.min(mDays, Math.round((pEndFull-pStart)/86400000)+1)-1);
+  const wStart=monday(today), wEndFull=addDays(wStart,6);
+  const wEnd = yesterday<wStart ? addDays(wStart,-1) : (yesterday<wEndFull?yesterday:wEndFull);
+  const wDays = Math.max(0, Math.round((wEnd-wStart)/86400000)+1);
+  const pwStart=addDays(wStart,-7);
+  const pwEnd = wDays<=0 ? addDays(pwStart,-1) : addDays(pwStart, wDays-1);
 
   async function agg(from,to){ const rr=rowsForRange(idx,from,to); if(!rr) return null; return aggregate(await loadBlock(rr.r1,rr.r2)); }
   show('Reading month data…');   const mA=await agg(mStart,mEnd);
@@ -395,7 +407,7 @@ async function renderHome(){
     <tr class="tot"><td>Total</td><td class="num">${fmt(e.total)}</td><td class="num">100%</td><td class="num">${trendHtml(e.total,pe.total,true)}</td></tr></table>`;
   }
   M.innerHTML=`
-  <div class="card"><h2>Month — ${monthName}</h2><div class="kpis">
+  <div class="card"><h2>Month — ${monthName}</h2><p class="muted" style="margin:-4px 0 8px">Through ${mDays>0?ymd(mEnd):'— no days elapsed yet'} · vs. same ${mDays} day(s) of previous month</p><div class="kpis">
     ${kpi('Projected deliveries',fmt(mA?.plan),trendHtml(mA?.plan,pA?.plan))}
     ${kpi('Returns',`${fmt(mA?.ret)} <span style="font-size:12px">(${mA?pct(mA.ret,mA.plan).toFixed(0):0}%)</span>`,trendHtml(mA?pct(mA.ret,mA.plan):null,pA?pct(pA.ret,pA.plan):null,true))}
     ${kpi('Sold units',fmt(mA?.sold),trendHtml(mA?.sold,pA?.sold))}
@@ -404,7 +416,7 @@ async function renderHome(){
   </div></div>
   <div class="card"><h2>Month — sales per client</h2>${pcTable(mA,pA)}</div>
   <div class="card"><h2>Month — expenditure by category</h2>${expTable(mE,pE)}</div>
-  <div class="card"><h2>This week (${ymd(wStart)} → ${ymd(wEnd)})</h2><div class="kpis">
+  <div class="card"><h2>This week (${ymd(wStart)} → ${ymd(wEndFull)})</h2><p class="muted" style="margin:-4px 0 8px">Through ${wDays>0?ymd(wEnd):'— no days elapsed yet'}</p><div class="kpis">
     ${kpi('Projected deliveries',fmt(wA?.plan),trendHtml(wA?.plan,pwA?.plan))}
     ${kpi('Returns',`${fmt(wA?.ret)} <span style="font-size:12px">(${wA?pct(wA.ret,wA.plan).toFixed(0):0}%)</span>`,trendHtml(wA?pct(wA.ret,wA.plan):null,pwA?pct(pwA.ret,pwA.plan):null,true))}
     ${kpi('Sold units',fmt(wA?.sold),trendHtml(wA?.sold,pwA?.sold))}
@@ -446,8 +458,7 @@ async function renderDeliv(){
   </div>
   <p class="muted" style="margin-top:8px">Edit <b>Deliveries</b> (plan, col G) and <b>Returns</b> (col H). Sold / Total are the Master's own formulas — read only.
   Rows marked <span class="pill un">Sample</span> or <span class="pill un">No returns</span> have Returns locked at 0, as agreed. Changed cells turn orange until saved.</p>
-  ${writeAllowed?`<div class="row" style="margin-top:8px"><button class="btn" id="saveBtn" onclick="saveDeliv()" disabled>Save changes to Master</button><span id="saveMsg" class="muted"></span></div>
-  <div id="reviewBox"></div>`:'<p class="muted">Your role (Viewer) can look but not edit. Ask an Admin/Editor to make changes.</p>'}
+  ${writeAllowed?`<div class="row" style="margin-top:8px"><button class="btn" id="saveBtn" onclick="saveDeliv()" disabled>Save changes to Master</button><span id="saveMsg" class="muted"></span></div>`:'<p class="muted">Your role (Viewer) can look but not edit. Ask an Admin/Editor to make changes.</p>'}
   </div>
   ${Object.keys(days).length? Object.entries(days).map(([k,rows],di)=>{
     const dayName=rows[0].day||new Date(k).toLocaleString('en-GB',{weekday:'long'});
@@ -461,36 +472,62 @@ async function renderDeliv(){
     ${rows.map(x=>{
       const lock=rowLock(x);
       dMeta[x.row]={name:x.name,product:x.product};
+      const price=Number(x.price)||0;
+      // Live Sold/Total (item: totals didn't update as you typed). Sold = Delivered - Returned,
+      // Total = Sold x Price, confirmed by Gu. This is a cosmetic client-side echo only — the
+      // Master's own formula remains authoritative once you Save/Sync.
       const retCell = lock
         // QC fix: this used to hardcode "0" regardless of what the Master actually holds. If an old
         // row happened to have a non-zero Returned value from before this rule existed, showing a
         // hardcoded 0 would misrepresent the real data (it's read-only so nothing gets corrected —
         // it would just be a wrong number on screen). Show the real value; flag it if it isn't 0.
-        ? `<input class="cell locked" value="${x.ret??0}" readonly title="${lock==='sample'?'Sample — no returns':'No returns for this client type'}">${(Number(x.ret)||0)!==0?'<br><span class="pill pend" style="margin-top:2px">Master shows non-zero — check</span>':''}`
-        : `<input class="cell" type="number" min="0" value="${x.ret??''}" ${writeAllowed?`onchange="markDirty(${x.row},'H',this)"`:'readonly'}>`;
-      const planCell = `<input class="cell" type="number" min="0" value="${x.plan??''}" ${writeAllowed?`onchange="markDirty(${x.row},'G',this)"`:'readonly'}>`;
+        ? `<input class="cell locked" id="h${x.row}" value="${x.ret??0}" readonly title="${lock==='sample'?'Sample — no returns':'No returns for this client type'}">${(Number(x.ret)||0)!==0?'<br><span class="pill pend" style="margin-top:2px">Master shows non-zero — check</span>':''}`
+        : `<input class="cell colH" id="h${x.row}" data-addr="H${x.row}" type="number" min="0" value="${x.ret??''}" ${writeAllowed?`onchange="markDirty(${x.row},'H',this)" oninput="liveCalc(${x.row},${price})" onkeydown="cellKeydown(event)"`:'readonly'}>`;
+      const planCell = `<input class="cell colG" id="g${x.row}" data-addr="G${x.row}" type="number" min="0" value="${x.plan??''}" ${writeAllowed?`onchange="markDirty(${x.row},'G',this)" oninput="liveCalc(${x.row},${price}${lock?','+(Number(x.ret)||0):''})" onkeydown="cellKeydown(event)"`:'readonly'}>`;
       return `<tr><td>${esc(x.name)}${lock?`<br><span class="pill un" style="margin-top:2px">${lock==='sample'?'Sample':'No returns'}</span>`:''}</td><td>${esc(x.product)}</td>
       <td class="num">${planCell}</td>
       <td class="num">${retCell}</td>
-      <td class="num">${fmt(x.sold)}</td><td class="num">${fmt(x.price)}</td><td class="num">${fmt(x.total)}</td></tr>`;
+      <td class="num" id="sold${x.row}">${fmt(x.sold)}</td><td class="num">${fmt(x.price)}</td><td class="num" id="tot${x.row}">${fmt(x.total)}</td></tr>`;
     }).join('')}
     </table></div></div>`;
   }).join('') : '<div class="card"><p class="muted">No rows found in the 2026 sheet for this week.</p></div>'}`;
 }
-function updateReviewBox(){
-  const box=document.getElementById('reviewBox'); if(!box) return;
-  const entries=Object.entries(dDirty);
-  if(!entries.length){ box.innerHTML=''; return; }
-  box.innerHTML=`<div class="review"><b>About to save ${entries.length} cell(s):</b><table>
-  <tr><th>Client</th><th>Product</th><th>Field</th><th class="num">New value</th></tr>
-  ${entries.map(([addr,val])=>{ const col=addr[0], row=addr.slice(1); const meta=dMeta[row]||{}; return `<tr><td>${esc(meta.name||'')}</td><td>${esc(meta.product||'')}</td><td>${col==='G'?'Deliveries':'Returns'}</td><td class="num">${val===null?'(blank)':fmt(val)}</td></tr>`; }).join('')}
-  </table></div>`;
-}
+// Fix (Gu, 2026-07-06): the old itemized "about to save" table was cumbersome and hard to read —
+// removed. A plain one-line count next to Save is enough to know something is pending.
 function markDirty(row,col,el){
   el.classList.add('dirty');
   dDirty[col+row]=el.value===''?null:Number(el.value);
   document.getElementById('saveBtn').disabled=false;
-  updateReviewBox();
+  const n=Object.keys(dDirty).length;
+  document.getElementById('saveMsg').textContent=n+' cell'+(n===1?'':'s')+' changed — not yet saved';
+}
+// Fix (Gu, 2026-07-06): totals didn't update as you typed — there was no client-side formula at
+// all before. This mirrors the Master's own Sold=Delivered-Returned, Total=Sold*Price purely for
+// on-screen feedback; the real formula in Excel is untouched and remains authoritative.
+function liveCalc(row,price,fixedRet){
+  const g=document.getElementById('g'+row);
+  const deliv=Number(g?.value)||0;
+  const h=document.getElementById('h'+row);
+  const ret = fixedRet!=null ? fixedRet : (Number(h?.value)||0);
+  const sold=deliv-ret, total=sold*price;
+  const soldEl=document.getElementById('sold'+row), totEl=document.getElementById('tot'+row);
+  if(soldEl) soldEl.textContent=fmt(sold);
+  if(totEl) totEl.textContent=fmt(total);
+}
+// Fix (Gu, 2026-07-06): Enter used to do nothing — there was no keyboard handler at all. Moves to
+// the next row down in the SAME column (Deliv stays in Deliv, Returns stays in Returns), expanding
+// the next day's section automatically if it was collapsed.
+function cellKeydown(e){
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  const cls = e.target.classList.contains('colG') ? 'colG' : 'colH';
+  const list=[...document.querySelectorAll('input.'+cls)];
+  const idx=list.indexOf(e.target);
+  if(idx>=0 && idx<list.length-1){
+    const next=list[idx+1];
+    const dayDiv=next.closest('[id^="day"]'); if(dayDiv) dayDiv.style.display='';
+    next.focus(); if(next.select) next.select();
+  } else { e.target.blur(); }
 }
 async function saveDeliv(){
   if(!can('write')) return;
@@ -501,40 +538,119 @@ async function saveDeliv(){
     url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026')/range(address='${addr}')`,
     body:{values:[[val]]}}));
   const res=await gbatch(reqs);
-  const fails=Object.values(res).filter(r=>r.status>=400);
+  const fails=Object.entries(res).filter(([id,r])=>r.status>=400);
   hide();
-  if(fails.length){ alert(fails.length+' cell(s) failed to save. Check the file is not locked and retry.'); }
-  else { dDirty={}; await renderDeliv(); document.getElementById('saveMsg').textContent='✓ Saved by '+currentUser.name+' at '+new Date().toLocaleTimeString(); }
+  if(fails.length){
+    // Fix (Gu, 2026-07-06): this used to say only "N cell(s) failed" with no detail. Now it shows
+    // the actual Graph error per cell (e.g. file locked/423, conflict/409) so the real cause is
+    // visible instead of guessing. Since Excel will now stay closed during app use, this specific
+    // "file locked" cause should no longer come up — but any other failure will now say what it is.
+    const detail=fails.map(([id,r])=>{
+      const i=Number(id.slice(1)); const addr=entries[i][0];
+      return addr+': HTTP '+r.status+(r.body&&r.body.error&&r.body.error.message?(' — '+r.body.error.message):'');
+    }).join('\n');
+    alert(fails.length+' cell(s) failed to save:\n\n'+detail+'\n\nIf the Master is open in desktop Excel, close it and try again.');
+  } else {
+    // Fix (Gu, 2026-07-06): this used to re-fetch the ENTIRE week from Graph after every save just
+    // to redraw the screen — that full re-read was the slow part, not the save itself. Sold/Total
+    // are already showing the correct live-calculated values (see liveCalc), so just clear the
+    // dirty markers in place instead of reloading. Press Sync any time to pull the Master's own
+    // authoritative formula results.
+    entries.forEach(([addr])=>{ const el=document.querySelector(`input[data-addr="${addr}"]`); if(el) el.classList.remove('dirty'); });
+    dDirty={};
+    document.getElementById('saveBtn').disabled=true;
+    document.getElementById('saveMsg').textContent='✓ Saved by '+currentUser.name+' at '+new Date().toLocaleTimeString();
+  }
 }
 
 /* ---------- INCOME (was "Invoices & Income" tab; item 6/7: renamed Income, now fully read-only —
    the highlight colour is only ever set inside Excel by whoever marks a payment; the app just
    displays it faithfully, it no longer writes fill colours). ---------- */
+/* Week-label parser (Gu confirmed format e.g. "29 Jun - 5 Jul"). The sheet actually mixes two
+   shapes — "D-D Mon [Year]" (e.g. "22-28 Jun 2026") and "D Mon - D Mon [Year]" (e.g. "29 Jun - 5
+   Jul") — both handled here. Year defaults to 2026 (this workbook's year) when not written; if the
+   end month is earlier than the start month it's a year boundary (Dec -> Jan), so the end year
+   bumps by one. */
+const MONTHS3={jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+function parseWeekLabel(label,defYear){
+  const s=String(label||'').trim();
+  let m=s.match(/^(\d{1,2})-(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s*(\d{4})?$/);
+  if(m){ const mo=MONTHS3[m[3].toLowerCase()]; if(mo==null) return null;
+    const yr=m[4]?Number(m[4]):defYear;
+    return {start:new Date(yr,mo,Number(m[1])), end:new Date(yr,mo,Number(m[2]))}; }
+  m=s.match(/^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s*-\s*(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s*(\d{4})?$/);
+  if(m){ const mo1=MONTHS3[m[2].toLowerCase()], mo2=MONTHS3[m[4].toLowerCase()]; if(mo1==null||mo2==null) return null;
+    const yr1=m[5]?Number(m[5]):defYear, yr2=mo2<mo1?yr1+1:yr1;
+    return {start:new Date(yr1,mo1,Number(m[1])), end:new Date(yr2,mo2,Number(m[3]))}; }
+  return null;
+}
+/* Fix (Gu, 2026-07-06): "invoice number" on this page was actually just echoing the branch code
+   for Shoppers and always blank for Village/Butcher — the [Invoices & Income] sheet itself has no
+   real invoice numbers in it. The real numbers live in the Shoppers/Village/Butcher Receipts
+   sheets (Invoice_Number column), matched here by week + branch. */
+function sheetForCol(name){
+  if(name==='BUTCHER') return {sheet:'Butcher Receipts', branch:'Butcher'};
+  if(name==='VILLAGE') return {sheet:'Village Receipts', branch:'Village'};
+  return {sheet:'Shoppers Receipts', branch:String(name).trim().split(/\s+/).pop()};
+}
+async function loadReceiptInvoiceNumbers(force){
+  if(cache.recInv && !force) return cache.recInv;
+  const map={};
+  for(const sheet of ['Shoppers Receipts','Village Receipts','Butcher Receipts']){
+    const r=await g(wsRange(sheet,'A1:H400')+'?$select=values');
+    const V=r.values||[]; if(!V.length) continue;
+    const header=V[0]; const col=n=>header.indexOf(n);
+    const wsIdx=col('Week_Start_Date'), invIdx=col('Invoice_Number'), branchIdx=col('Client_Branch')>=0?col('Client_Branch'):col('Client_Name');
+    for(let i=1;i<V.length;i++){
+      const row=V[i]; const d=excelDate(row[wsIdx]); if(!d) continue;
+      map[sheet+'|'+ymd(d)+'|'+(row[branchIdx]||'')]=row[invIdx]||'';
+    }
+  }
+  cache.recInv=map; return map;
+}
 async function renderIncome(){
-  const weeks=await loadInvoiceRows();
-  await loadInvoiceFills(weeks);
+  const weeksRaw=await loadInvoiceRows();
+  const today=new Date(); today.setHours(0,0,0,0);
+  const thisMonday=monday(today);
+  /* Fix (Gu, 2026-07-06): the sheet has weeks pre-templated ahead of time with copy-pasted
+     placeholder numbers for weeks that haven't happened yet, and at least one repeated week label
+     with two different sets of totals. Only keep weeks that have FULLY ended before this week
+     (drops the future placeholders automatically), and de-duplicate by label keeping the LAST
+     occurrence in sheet order (assumed to be the corrected/most recent entry) — flagged below if
+     that happened, since a repeated label with different totals is worth double-checking in Excel. */
+  const byLabel=new Map(); let dupeFound=false;
+  weeksRaw.forEach(w=>{
+    const parsed=parseWeekLabel(w.label,2026);
+    if(!parsed || parsed.end>=thisMonday) return;
+    if(byLabel.has(w.label)) dupeFound=true;
+    byLabel.set(w.label,{...w,_start:parsed.start,_end:parsed.end});
+  });
+  const completed=[...byLabel.values()].sort((a,b)=>a._end-b._end);
+  const recent=completed.slice(-5).reverse();
+  await loadInvoiceFills(recent,true);
+  const invMap=await loadReceiptInvoiceNumbers();
   hide();
-  const recent=weeks.slice(-S.scanWeeks).reverse();
   const pending=[];
   recent.forEach(w=>w.cols.forEach(col=>{
     if(classifyFill(cache.invFills[`${w.totRow}_${col.c}`])==='pend' && col.amount>0) pending.push({week:w.label,name:col.name,amount:col.amount});
   }));
   const pendTot=pending.reduce((s,x)=>s+x.amount,0);
   M.innerHTML=`<div class="card"><h2>Income</h2>
-  <p class="muted">Read-only — this mirrors the [Invoices & Income] sheet exactly, including its green (paid) / orange (pending) highlight. To mark something paid, do it in Excel; the app will show it on next Sync.</p>
-  <label>Weeks shown</label><select onchange="S.scanWeeks=+this.value;LSset('scanWeeks',this.value);cache.invFills={};renderIncome()">
-  ${[6,10,16,26,52].map(n=>`<option ${n===S.scanWeeks?'selected':''}>${n}</option>`).join('')}</select></div>
-  <div class="card"><h2>Pending payments (orange) — last ${S.scanWeeks} weeks</h2>
+  <p class="muted">Read-only — this mirrors the [Invoices & Income] sheet exactly, including its green (paid) / orange (pending) highlight. To mark something paid, do it in Excel; the app will show it on next Sync. Showing the last ${recent.length} fully completed week(s) (weeks still in progress or not yet reached are left out).</p>
+  ${dupeFound?'<p class="err">Note: the [Invoices & Income] sheet has the same week label appearing more than once with different totals — showing the later entry. Worth checking in Excel which one is correct.</p>':''}</div>
+  <div class="card"><h2>Pending payments (orange) — last ${recent.length} week(s)</h2>
     ${pending.length?`<table><tr><th>Week</th><th>Client</th><th class="num">TZS</th></tr>
       ${pending.map(x=>`<tr><td>${esc(x.week)}</td><td>${esc(x.name)}</td><td class="num">${fmt(x.amount)}</td></tr>`).join('')}
       <tr class="tot"><td colspan="2">Total receivable</td><td class="num">${fmt(pendTot)}</td></tr></table>`
-      :'<p class="muted">No pending (orange) payments in the scanned weeks.</p>'}
+      :'<p class="muted">No pending (orange) payments in the shown weeks.</p>'}
   </div>
   ${recent.map(w=>`<div class="card"><h3 class="wk" style="margin-top:0">${esc(w.label)} — total ${fmtT(w.total)}</h3>
   <div style="overflow-x:auto"><table><tr><th>Client</th><th>Invoice</th><th class="num">TZS</th><th>Status</th></tr>
   ${w.cols.filter(c=>c.amount>0).map(col=>{
     const key=`${w.totRow}_${col.c}`, st=classifyFill(cache.invFills[key]);
-    return `<tr><td>${esc(col.name)}</td><td class="muted">${esc(col.inv&&col.inv!==col.name?col.inv:'')}</td>
+    const sc=sheetForCol(col.name);
+    const invNo=invMap[sc.sheet+'|'+ymd(w._start)+'|'+sc.branch]||'';
+    return `<tr><td>${esc(col.name)}</td><td class="muted">${esc(invNo)}</td>
     <td class="num">${fmt(col.amount)}</td>
     <td><span class="pill ${st}">${st==='paid'?'Paid':st==='pend'?'Pending':'—'}</span></td></tr>`;
   }).join('')}</table></div></div>`).join('')}`;
@@ -553,7 +669,7 @@ async function renderInvoices(){
   <div class="card"><h2>Weekly summaries (this week)</h2>
   <p class="muted">Pulled from the Shoppers Receipts / Village Receipts / Butcher Receipts sheets (the same clean weekly data the receipt scripts use) rather than the daily working sheets, for reliability.</p>
   <div id="invSummary">Loading…</div></div>
-  <div class="card"><h2>Last Monday's generated receipts</h2><div id="invPdfList">Loading…</div></div>`;
+  <div class="card"><h2>Latest generated receipts (one per branch)</h2><div id="invPdfList">Loading…</div></div>`;
   await loadInvoiceSummaries();
   await loadReceiptPdfs();
 }
@@ -606,21 +722,68 @@ async function loadInvoiceSummaries(){
     }).join('') || '<p class="muted">No data.</p>';
   }catch(e){ hide(); box.innerHTML=`<div class="err">${esc(e.message)}</div>`; }
 }
+/* Fix (Gu, 2026-07-06): the old version only listed the TOP-LEVEL children of each receipts folder.
+   Shoppers actually stores its PDFs nested inside "Invoices N-M" sub-folders, so that top-level
+   listing returned zero PDFs for Shoppers ("no PDF exists") — it was only ever seeing sub-folders.
+   Village/Butcher store PDFs directly at the top level, so they "worked" but with no filtering at
+   all, showing up to 15 most-recent files regardless of branch/date ("entire year"). Fixed by:
+   1) a recursive folder search (finds PDFs at any depth, fixing Shoppers), 2) grouping by branch
+   code extracted from the filename and showing only the single latest file per branch/client
+   (fixing "entire year" for all three), 3) caching the resolved folder ID persistently (like the
+   Master file/timetables folder already do) so this doesn't re-search by name on every visit. */
+const RECEIPT_FOLDERS={Shoppers:'Shoppers_Receipts_2026',Village:'Village_Receipts_2026',Butcher:'Butcher_Receipts_2026'};
+const SHOPPERS_CODES=['SMA','SMB','SMI','STE','SML'];
+function codeFromFilename(name,key){
+  const base=name.replace(/\.pdf$/i,'');
+  if(key==='Shoppers'){ const m=base.match(/(SMA|SMB|SMI|STE|SML)$/i); return m?m[1].toUpperCase():null; }
+  return key.toUpperCase(); // Village/Butcher: one client each, code = the key itself
+}
+async function resolveReceiptFolder(key){
+  if(S.pdfFolders[key]) return S.pdfFolders[key];
+  const name=RECEIPT_FOLDERS[key];
+  const r=await g(`/me/drive/root/search(q='${encodeURIComponent(name)}')?$select=id,name,folder&$top=10`);
+  const hit=(r.value||[]).find(x=>x.folder && x.name===name);
+  if(!hit) return null;
+  S.pdfFolders[key]=hit.id; LSset('pdfFolders',JSON.stringify(S.pdfFolders));
+  return hit.id;
+}
 async function loadReceiptPdfs(){
   const box=document.getElementById('invPdfList');
+  if(cache.pdfLatest){ box.innerHTML=cache.pdfLatest; return; } // session cache; cleared by Sync
   try{
-    show("Finding last Monday's PDFs…");
-    const folders=['Shoppers_Receipts_2026','Village_Receipts_2026','Butcher_Receipts_2026'];
+    show('Finding the latest receipts…');
     let html='';
-    for(const name of folders){
-      const r=await g(`/me/drive/root/search(q='${encodeURIComponent(name)}')?$select=id,name,folder&$top=5`);
-      const hit=(r.value||[]).find(x=>x.folder && x.name===name);
-      if(!hit){ html+=`<p class="muted">${name}: folder not found.</p>`; continue; }
-      const kids=await g(`/me/drive/items/${hit.id}/children?$select=name,webUrl,lastModifiedDateTime,folder&$orderby=lastModifiedDateTime desc&$top=15`);
-      const pdfs=(kids.value||[]).filter(x=>!x.folder && x.name.toLowerCase().endsWith('.pdf'));
-      html+=`<h3 class="wk">${name}</h3>${pdfs.length?pdfs.map(f=>`<a class="filelink" href="${f.webUrl}" target="_blank">📄 ${esc(f.name)}<small>Modified ${f.lastModifiedDateTime?.slice(0,10)||''}</small></a>`).join(''):'<p class="muted">No PDFs found (recurse into invoice sub-folders manually if needed).</p>'}`;
+    for(const key of Object.keys(RECEIPT_FOLDERS)){
+      let folderId=await resolveReceiptFolder(key);
+      let files=[];
+      const fetchPdfs=async(id)=>{
+        const r=await g(`/me/drive/items/${id}/search(q='.pdf')?$select=name,webUrl,lastModifiedDateTime,file&$top=200`);
+        return (r.value||[]).filter(x=>x.file && x.name.toLowerCase().endsWith('.pdf'));
+      };
+      if(folderId){
+        try{ files=await fetchPdfs(folderId); }
+        catch(e){ // cached folder ID may be stale (moved/renamed) — clear and retry once
+          delete S.pdfFolders[key]; LSset('pdfFolders',JSON.stringify(S.pdfFolders));
+          folderId=await resolveReceiptFolder(key);
+          if(folderId) files=await fetchPdfs(folderId);
+        }
+      }
+      html+=`<h3 class="wk">${key}</h3>`;
+      if(!folderId){ html+=`<p class="muted">${RECEIPT_FOLDERS[key]} folder not found.</p>`; continue; }
+      if(!files.length){ html+='<p class="muted">No PDFs found in this folder.</p>'; continue; }
+      const codes = key==='Shoppers' ? SHOPPERS_CODES : [key.toUpperCase()];
+      let any=false;
+      for(const code of codes){
+        const matches=files.filter(f=>codeFromFilename(f.name,key)===code);
+        if(!matches.length) continue;
+        any=true;
+        matches.sort((a,b)=>(b.lastModifiedDateTime||'').localeCompare(a.lastModifiedDateTime||''));
+        const latest=matches[0];
+        html+=`<a class="filelink" href="${latest.webUrl}" target="_blank">📄 ${esc(latest.name)} <span class="muted">(${code})</span><small>Modified ${latest.lastModifiedDateTime?.slice(0,10)||''}</small></a>`;
+      }
+      if(!any) html+='<p class="muted">No matching receipts found.</p>';
     }
-    hide(); box.innerHTML=html;
+    hide(); box.innerHTML=html; cache.pdfLatest=html;
   }catch(e){ hide(); box.innerHTML=`<div class="err">${esc(e.message)}</div>`; }
 }
 
@@ -716,15 +879,18 @@ async function renderStaff(){
     files=r.value||[];
   }
   hide();
+  // Fix (Gu, 2026-07-06): used to fall back to showing EVERY file in the folder whenever the
+  // month-name match failed, which let unrelated files leak through. Now only Massimo_timetable_*
+  // files are ever considered, and if this month's isn't found, it says so instead of dumping
+  // the whole folder.
+  const massimoFiles=files.filter(f=>f.name.toLowerCase().startsWith('massimo_timetable'));
   const monthName=new Date().toLocaleString('en-GB',{month:'long'}), year=new Date().getFullYear();
   const wanted=(monthName+String(year)).toLowerCase();
-  const thisMonth=files.filter(f=>f.name.toLowerCase().replace(/[^a-z0-9]/g,'').includes(wanted.replace(/[^a-z0-9]/g,'')));
-  const shown=thisMonth.length?thisMonth:files; // fallback: if naming doesn't match, show everything rather than nothing
+  const thisMonth=massimoFiles.filter(f=>f.name.toLowerCase().replace(/[^a-z0-9]/g,'').includes(wanted.replace(/[^a-z0-9]/g,'')));
   M.innerHTML=`<div class="card"><h2>Schedule</h2>
   ${!S.tfolderId?'<p class="muted">Timetables folder not linked yet — go to Settings → Find timetables folder.</p>':
-  shown.length? shown.map(f=>`<a class="filelink" href="${f.webUrl}" target="_blank">📄 ${esc(f.name)}<small>Modified ${f.lastModifiedDateTime?.slice(0,10)||''}</small></a>`).join('')
-  :'<p class="muted">Folder is empty.</p>'}
-  ${!thisMonth.length && files.length?`<p class="muted" style="margin-top:8px">Couldn't match a file named for ${esc(monthName)} ${year} by name, so showing everything in the folder instead.</p>`:''}
+  thisMonth.length? thisMonth.map(f=>`<a class="filelink" href="${f.webUrl}" target="_blank">📄 ${esc(f.name)}<small>Modified ${f.lastModifiedDateTime?.slice(0,10)||''}</small></a>`).join('')
+  :`<p class="muted">No Massimo_timetable file found for ${esc(monthName)} ${year}.</p>`}
   <p class="muted" style="margin-top:10px">Files open read-only in Excel/Word online in a new tab.</p></div>`;
 }
 
@@ -734,7 +900,7 @@ function renderCalendar(){
   M.innerHTML=`<div class="card" style="text-align:center;padding:30px 20px">
   <h2 style="border:none">Calendar</h2>
   <p class="muted" style="margin-bottom:16px">Opens your Massimo Italian Bread Google Calendar in a new tab (massimoitalianbreadtz@gmail.com). Compliance reminders (PAYE, WCF, VAT, BRELA, TBS) already live there.</p>
-  <a class="btn" style="text-decoration:none;display:inline-block" href="https://calendar.google.com/calendar/u/0/r/week" target="_blank">Open this week's calendar ↗</a>
+  <a class="btn" style="text-decoration:none;display:inline-block" href="https://calendar.google.com/calendar/r?cid=massimoitalianbreadtz%40gmail.com" target="_blank">Open this week's calendar ↗</a>
   </div>`;
 }
 
@@ -804,7 +970,7 @@ async function findFolder(){
 }
 
 /* ---------- SYNC & BOOT ---------- */
-async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:{},monthBlocks:{}}; await render(); }
+async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:{},monthBlocks:{},pdfLatest:null,recInv:null}; await render(); }
 (async function boot(){
   // PWA manifest for "install to home screen" (item 3b: Android uses manifest icons; iOS Safari
   // ignores the manifest for the home-screen icon and needs its own apple-touch-icon link tag).
