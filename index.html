@@ -137,7 +137,17 @@ function initMsal(){
   });
   return true;
 }
-async function login(){ await msalApp.loginRedirect({scopes:['Files.ReadWrite','User.Read']}); }
+async function login(){
+  // Fixed: this used to fail completely silently (no visible error) if msalApp wasn't ready or
+  // the redirect was rejected for any reason — Gu clicked Sign in and nothing happened, with no
+  // way for either of us to tell why. Now any failure shows on screen with the real message.
+  try{
+    if(!msalApp) throw new Error('Sign-in is not ready yet — the Client ID may not be saved on this exact web address yet. Save it in Settings, then try again.');
+    await msalApp.loginRedirect({scopes:['Files.ReadWrite','User.Read']});
+  }catch(e){
+    M.innerHTML=`<div class="err">Sign-in could not start: ${esc(e.message||e)}<br><br>Redirect URI this page is using:<br>${esc(location.origin+location.pathname)}<br><br>Check this exact address (including the trailing slash or /index.html) matches the Redirect URI in your Azure app registration.</div><button class="btn" onclick="render()">Back</button>`;
+  }
+}
 async function getToken(){
   const req={scopes:['Files.ReadWrite','User.Read'],account};
   try{ const r=await msalApp.acquireTokenSilent(req); return r.accessToken; }
@@ -278,16 +288,17 @@ const M=document.getElementById('main');
 
 async function render(){
   try{
-    const bootstrapping = !S.clientId || !S.fileId; // nothing configured yet -> Settings must be reachable with no gate at all
-    if(bootstrapping){ return renderSettings(); }
+    if(!S.clientId || !S.fileId){ page='set'; }
+    if(page==='set') return renderSettings(); // REVERTED: Settings must always be reachable, exactly
+    // like before the QC pass. My earlier "fix" forced everyone through the brand-new PIN system
+    // before Settings would even show, which locked out an already-configured device that has no
+    // PIN users defined yet (chicken-and-egg: you can't create a user without reaching a working
+    // Settings page, and you couldn't reach it because no user existed). The write-gating inside
+    // renderSettings() still protects it once a Viewer PIN is actively in use — see settingsWriteAllowed.
     if(!account){ return renderLogin(); }
-    if(!currentUser){ return renderPinGate(); } // QC fix: previously Settings was reachable WITHOUT
-    // a PIN even once the app was fully set up, letting anyone relink the Master file or sign out
-    // without identifying themselves. Now every page, including Settings, requires the PIN gate
-    // once the app is configured.
+    if(!currentUser){ return renderPinGate(); }
     document.getElementById('userchip').style.display='';
     document.getElementById('userchip').textContent=currentUser.name+' ('+ROLES[currentUser.role].label+') · switch';
-    if(page==='set') return renderSettings();
     if(page==='home') return await renderHome();
     if(page==='deliv') return await renderDeliv();
     if(page==='invoices') return await renderInvoices();
@@ -727,11 +738,12 @@ function renderCalendar(){
 /* ---------- SETTINGS ---------- */
 function renderSettings(){
   hide();
-  // QC fix: bootstrapping (first-ever run, before any user/PIN exists) must stay fully open, but
-  // once currentUser exists, a Viewer should not be able to relink the Master file, change the
-  // Client ID, or sign the device out — that's an Admin/Editor action.
-  const bootstrapping = !S.clientId || !S.fileId;
-  const settingsWriteAllowed = bootstrapping || can('write');
+  // Fixed after Gu got locked out: only restrict these controls when someone has actively picked a
+  // Viewer identity at the PIN screen. If no PIN identity is active at all (currentUser null — e.g.
+  // this device hasn't set up the PIN system, or hasn't switched to it since an update), Settings
+  // behaves exactly as it always did: fully open. This avoids ever requiring the PIN system just to
+  // reach basic Setup, while still restricting an actual logged-in Viewer.
+  const settingsWriteAllowed = !currentUser || can('write');
   M.innerHTML=`<div class="card"><h2>Setup</h2>
   ${!settingsWriteAllowed?'<p class="muted">Your role (Viewer) can see Setup but not change it.</p>':''}
   <label>1. Azure App Client ID (from SETUP_GUIDE.md, step 1)</label>
