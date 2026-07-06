@@ -295,7 +295,8 @@ function expByCat(exp,from,to){
 
 /* ================= PAGES ================= */
 let page='home';
-function go(p){ page=p; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p===p)); render(); }
+let _recoverAttempts=0; // reset per navigation so a genuinely broken state doesn't retry forever
+function go(p){ page=p; _recoverAttempts=0; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p===p)); render(); }
 const M=document.getElementById('main');
 
 async function render(){
@@ -318,7 +319,26 @@ async function render(){
     if(page==='exp') return await renderExpenses();
     if(page==='staff') return await renderStaff();
     if(page==='cal') return renderCalendar();
-  }catch(e){ hide(); M.innerHTML=`<div class="err">Error: ${esc(e.message)}</div><button class="btn" onclick="render()">Retry</button>`; }
+  }catch(e){
+    hide();
+    // Self-healing (Gu, 2026-07-06): an "itemNotFound" naming the currently-cached file/folder ID
+    // means Excel re-saved it under a new OneDrive ID (normal, out of our control) — re-search by
+    // name and retry automatically once per navigation, instead of leaving Gu stuck on an error
+    // until she manually re-links it in Settings.
+    if(_recoverAttempts<2 && /itemNotFound/.test(e.message)){
+      const staleFile=S.fileId && e.message.includes(S.fileId);
+      const staleFolder=S.tfolderId && e.message.includes(S.tfolderId);
+      if(staleFile || staleFolder){
+        _recoverAttempts++;
+        show('Reconnecting to your file…');
+        let recovered=false;
+        if(staleFile) recovered = await reresolveFileId() || recovered;
+        if(staleFolder) recovered = await reresolveFolderId() || recovered;
+        if(recovered) return render();
+      }
+    }
+    M.innerHTML=`<div class="err">Error: ${esc(e.message)}</div><button class="btn" onclick="render()">Retry</button>`;
+  }
 }
 function renderLogin(){
   M.innerHTML=`<div class="card" style="text-align:center;padding:40px 20px">
@@ -984,6 +1004,31 @@ function removeUser(i){
   const users=getUsers(); const u=users[i];
   if(!confirm('Remove '+u.name+'?')) return;
   users.splice(i,1); setUsers(users); renderSettings();
+}
+/* Self-healing (Gu, 2026-07-06): if Excel re-saves the Master in a way that gives it a new OneDrive
+   item ID (this happens sometimes, is normal, and is out of our control), every cached page broke
+   with a permanent "itemNotFound" until Gu manually re-did "Find the file" in Settings. These two
+   mirror the same by-name search Settings already uses, so render()'s catch block can recover
+   automatically instead of leaving her stuck. */
+async function reresolveFileId(){
+  try{
+    const r=await g(`/me/drive/root/search(q='Salty_Water_2026_Master')?$select=id,name,parentReference&$top=10`);
+    const hit=(r.value||[]).find(x=>x.name.toLowerCase().endsWith('.xlsx'));
+    if(!hit) return false;
+    S.fileId=hit.id; S.fileDriveId=(hit.parentReference&&hit.parentReference.driveId)||null;
+    LSset('fileId',S.fileId); LSset('fileDriveId',S.fileDriveId||'');
+    return true;
+  }catch(e){ return false; }
+}
+async function reresolveFolderId(){
+  try{
+    const r=await g(`/me/drive/root/search(q='Schedules and Timetables')?$select=id,name,folder,parentReference&$top=10`);
+    const hit=(r.value||[]).find(x=>x.folder);
+    if(!hit) return false;
+    S.tfolderId=hit.id; S.tfolderDriveId=(hit.parentReference&&hit.parentReference.driveId)||null;
+    LSset('tfolderId',S.tfolderId); LSset('tfolderDriveId',S.tfolderDriveId||'');
+    return true;
+  }catch(e){ return false; }
 }
 async function findFile(){
   const o=document.getElementById('setout'); o.innerHTML='Searching…';
