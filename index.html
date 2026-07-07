@@ -9,7 +9,12 @@
 <!-- Switched from cdnjs to jsDelivr: cdnjs was intermittently returning 503 for this exact file,
      which silently broke Sign-in (msal never loaded, so "Sign in" did nothing) with no visible
      error until the login() error handling was added. jsDelivr verified reliable at time of fix. -->
-<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"
+        onerror="var s=document.createElement('script');s.src='https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js';document.head.appendChild(s)"></script>
+<!-- Fallback above (2026-07-07): if jsDelivr fails like cdnjs did on 2026-07-06, the same pinned
+     version is loaded from unpkg. boot() also waits briefly for msal and shows a visible error
+     instead of dying silently if BOTH CDNs are down. -->
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
@@ -127,6 +132,9 @@ function can(action){ // action: 'write' | 'manageUsers'
 const PAID='#92D050', PEND='#FFC000';
 let cache = { dateIndex:null, exp:null, invRows:null, invFills:{}, monthBlocks:{}, pdfLatest:null, recInv:null };
 const GRAPH='https://graph.microsoft.com/v1.0';
+// Fix (2026-07-07): Home read A1:J1500 while the Expenses page read A1:J1600 — past row 1500 the
+// Home expenditure totals would silently under-count. One shared constant now.
+const EXP_RANGE='A1:J1600';
 const fmt = n => (n==null||isNaN(n))?'—':Math.round(n).toLocaleString('en-US');
 const fmtT = n => fmt(n)+' TZS';
 const pct = (a,b) => b? (100*a/b) : 0;
@@ -154,7 +162,10 @@ async function login(){
 async function getToken(){
   const req={scopes:['Files.ReadWrite','User.Read'],account};
   try{ const r=await msalApp.acquireTokenSilent(req); return r.accessToken; }
-  catch(e){ await msalApp.acquireTokenRedirect(req); }
+  // Fix (2026-07-07): this used to fall through and return undefined after starting the redirect,
+  // letting one request fire with "Bearer undefined" before the page navigated away. The
+  // never-resolving promise parks the caller until the redirect happens.
+  catch(e){ await msalApp.acquireTokenRedirect(req); return new Promise(()=>{}); }
 }
 async function g(path, opts={}){
   const t=await getToken();
@@ -223,7 +234,7 @@ async function loadBlock(r1,r2){
 async function loadExpenditure(force){
   if(cache.exp && !force) return cache.exp;
   show('Reading expenditure…');
-  const r=await g(wsRange('2026 Expenditure','A1:J1500')+'?$select=values');
+  const r=await g(wsRange('2026 Expenditure',EXP_RANGE)+'?$select=values');
   const out=[];
   r.values.slice(1).forEach(v=>{
     let d=excelDate(v[0]);
@@ -256,7 +267,7 @@ async function loadInvoiceFills(weeks,force){
   weeks.forEach(w=>w.cols.forEach(col=>{
     const key=`${w.totRow}_${col.c}`;
     if(force || !(key in cache.invFills))
-      reqs.push({id:key,method:'GET',url:`/me/drive/items/${S.fileId}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
+      reqs.push({id:key,method:'GET',url:`${fileItemPath()}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col.c)}${w.totRow}')/format/fill`});
   }));
   if(reqs.length){ show(`Reading payment marks (${reqs.length} cells)…`);
     const res=await gbatch(reqs);
@@ -296,7 +307,7 @@ function expByCat(exp,from,to){
 /* ================= PAGES ================= */
 let page='home';
 let _recoverAttempts=0; // reset per navigation so a genuinely broken state doesn't retry forever
-function go(p){ page=p; _recoverAttempts=0; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p===p)); render(); }
+function go(p){ page=p; _recoverAttempts=0; if(typeof stopQrScan==='function') stopQrScan(); document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p===p)); render(); }
 const M=document.getElementById('main');
 
 async function render(){
@@ -561,10 +572,15 @@ async function saveDeliv(){
   const entries=Object.entries(dDirty);
   if(!entries.length) return;
   show(`Saving ${entries.length} cell(s) to the Master…`);
-  const reqs=entries.map(([addr,val],i)=>({id:'w'+i,method:'PATCH',
-    url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026')/range(address='${addr}')`,
-    body:{values:[[val]]}}));
-  const res=await gbatch(reqs);
+  // Fix (2026-07-07): saveDeliv runs from onclick, outside render()'s catch — a network drop
+  // mid-save used to leave the spinner stuck forever. Now any thrown error is surfaced.
+  let res;
+  try{
+    const reqs=entries.map(([addr,val],i)=>({id:'w'+i,method:'PATCH',
+      url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='${addr}')`,
+      body:{values:[[val]]}}));
+    res=await gbatch(reqs);
+  }catch(e){ hide(); alert('Save failed (nothing may have been written): '+(e.message||e)+'\n\nCheck your connection and try again.'); return; }
   const fails=Object.entries(res).filter(([id,r])=>r.status>=400);
   hide();
   if(fails.length){
@@ -850,7 +866,7 @@ const EXP_CATS=['Company Assets','Salaries','Materials','Bakery Provisions','Uti
 let expRowMeta=null;
 async function renderExpenses(){
   show('Reading this month’s expenses…');
-  const r=await g(wsRange('2026 Expenditure','A1:J1600')+'?$select=values');
+  const r=await g(wsRange('2026 Expenditure',EXP_RANGE)+'?$select=values');
   hide();
   const V=r.values||[];
   const today=new Date(); const mStart=new Date(today.getFullYear(),today.getMonth(),1), mEnd=new Date(today.getFullYear(),today.getMonth()+1,0);
@@ -874,6 +890,11 @@ async function renderExpenses(){
   <div class="card"><h2>Add new expense</h2>
   ${!writeAllowed?'<p class="muted">Your role (Viewer) can’t add expenses.</p>': !expRowMeta ? `<p class="err">No blank pre-formatted row is ready for ${monthName} in the Master's [2026 Expenditure] sheet yet. In Excel, copy the last row's formula down a few more rows, save, then come back and Sync.</p>` : `
   ${ymd(expRowMeta.d)!==ymd(today)?`<p class="muted">Note: the next ready row in the Master was originally pre-dated ${ymd(expRowMeta.d)} (the template hasn't been extended past there yet) — the date below defaults to today instead; change it if this expense is actually for a different day.</p>`:''}
+  <div class="row" style="margin:4px 0 2px"><button class="btn sm sec" onclick="startQrScan()">📷 Scan receipt QR (TRA)</button><span id="qrMsg" class="muted"></span></div>
+  <div id="qrScanBox" style="display:none"><video id="qrVideo" style="width:100%;max-height:320px;border-radius:12px;background:#000" playsinline muted></video>
+    <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="stopQrScan()">Cancel</button>
+    <label class="btn sm sec" style="margin:0;cursor:pointer">Use a photo instead<input type="file" accept="image/*" capture="environment" style="display:none" onchange="qrFromFile(this)"></label></div></div>
+  <div id="qrResult"></div>
   <label>Date</label><input id="exDate" type="date" value="${ymd(today)}">
   <label>Type of expenditure</label><select id="exType">${EXP_CATS.map(c=>`<option>${c}</option>`).join('')}</select>
   <label>Provider</label><input id="exProvider" placeholder="e.g. Theresia Joseph">
@@ -907,17 +928,102 @@ async function saveExpense(rowNum){
   const [exY,exM,exD]=dateStr.split('-').map(Number);
   const excelSerial=Math.round(Date.UTC(exY,exM-1,exD)/86400000)+25569;
   const reqs=[
-    {id:'a',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='A${rowNum}')`,body:{values:[[excelSerial]]}},
-    {id:'b',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='B${rowNum}:D${rowNum}')`,body:{values:[[type,provider,detail]]}},
-    {id:'c',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='E${rowNum}')`,body:{values:[[price]]}},
-    {id:'e',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='H${rowNum}:J${rowNum}')`,body:{values:[[receipt,tin,how]]}}
+    {id:'a',method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026 Expenditure')/range(address='A${rowNum}')`,body:{values:[[excelSerial]]}},
+    {id:'b',method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026 Expenditure')/range(address='B${rowNum}:D${rowNum}')`,body:{values:[[type,provider,detail]]}},
+    {id:'c',method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026 Expenditure')/range(address='E${rowNum}')`,body:{values:[[price]]}},
+    {id:'e',method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026 Expenditure')/range(address='H${rowNum}:J${rowNum}')`,body:{values:[[receipt,tin,how]]}}
   ];
-  if(vatRaw!=='') reqs.push({id:'d',method:'PATCH',url:`/me/drive/items/${S.fileId}/workbook/worksheets('2026 Expenditure')/range(address='F${rowNum}')`,body:{values:[[Number(vatRaw)]]}});
-  const res=await gbatch(reqs);
+  if(vatRaw!=='') reqs.push({id:'d',method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026 Expenditure')/range(address='F${rowNum}')`,body:{values:[[Number(vatRaw)]]}});
+  // Fix (2026-07-07): same onclick-outside-render()-catch issue as saveDeliv — surface errors
+  // instead of leaving the spinner stuck.
+  let res;
+  try{ res=await gbatch(reqs); }
+  catch(e){ hide(); alert('Save failed (the expense may not have been written): '+(e.message||e)+'\n\nCheck your connection, then Sync to see whether the row was saved before retrying — do not double-enter it.'); return; }
   const fails=Object.values(res).filter(r=>r.status>=400);
   hide();
   if(fails.length){ alert(fails.length+' field(s) failed to save. Check the file is not locked and retry.'); }
   else { cache.exp=null; await renderExpenses(); }
+}
+
+/* ---------- QR SCAN (2026-07-07): scan the TRA EFD QR on a supplier receipt to prefill the
+   Receipt n. field of the Add-expense form. Verified against a real receipt (Shoppers Tegeta,
+   7 Jul 2026): the QR contains ONLY the verification URL, e.g.
+   https://verify.tra.go.tz/9A5E2D1125_153826  (receipt code + issue time HHMMSS).
+   The amounts / TIN / seller name are NOT in the QR — they are on TRA's verification page, which
+   a browser app cannot fetch cross-origin (CORS). So those fields stay manual, and the app offers
+   a one-tap link to the TRA page to check them. ---------- */
+let qrStream=null, qrRAF=null;
+function qrLibLoad(){ // jsQR pinned to 1.4.0, dual-CDN (lesson from the 2026-07-06 cdnjs outage:
+  // never single-source a critical script from one CDN)
+  if(window.jsQR) return Promise.resolve();
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+    s.onload=res;
+    s.onerror=()=>{ const s2=document.createElement('script'); s2.src='https://unpkg.com/jsqr@1.4.0/dist/jsQR.min.js'; s2.onload=res; s2.onerror=()=>rej(new Error('Could not load the QR reader from either CDN — check the internet connection.')); document.head.appendChild(s2); };
+    document.head.appendChild(s);
+  });
+}
+function applyQr(text){
+  const out=document.getElementById('qrResult'); if(!out) return;
+  const m=String(text).match(/verify\.tra\.go\.tz\/([A-Za-z0-9]+)_(\d{2})(\d{2})(\d{2})/i);
+  if(m){
+    const code=m[1].toUpperCase();
+    const rec=document.getElementById('exReceipt'); if(rec) rec.value=code;
+    out.innerHTML=`<div class="ok">TRA receipt code <b>${esc(code)}</b> (issued ${m[2]}:${m[3]}:${m[4]}) filled into Receipt n.<br>
+    Amounts still need typing — they are only on TRA's page, which the app can't read automatically.<br>
+    <a href="${esc(text)}" target="_blank">Open this receipt on TRA to check ↗</a></div>`;
+  } else {
+    const rec=document.getElementById('exReceipt'); if(rec) rec.value=String(text).slice(0,60);
+    out.innerHTML=`<div class="review">A QR was read, but it isn't a TRA verification link — its raw text was placed in Receipt n. Check it looks right: ${esc(String(text).slice(0,120))}</div>`;
+  }
+}
+async function startQrScan(){
+  const msg=document.getElementById('qrMsg'); if(msg) msg.textContent='';
+  try{ await qrLibLoad(); }catch(e){ if(msg) msg.textContent=e.message; return; }
+  const box=document.getElementById('qrScanBox'); box.style.display='';
+  const video=document.getElementById('qrVideo');
+  try{
+    qrStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    video.srcObject=qrStream; await video.play();
+    const cv=document.createElement('canvas'), cx=cv.getContext('2d',{willReadFrequently:true});
+    const tick=()=>{
+      if(!qrStream) return;
+      if(video.readyState===video.HAVE_ENOUGH_DATA){
+        cv.width=video.videoWidth; cv.height=video.videoHeight;
+        cx.drawImage(video,0,0);
+        const im=cx.getImageData(0,0,cv.width,cv.height);
+        const q=window.jsQR(im.data,im.width,im.height);
+        if(q && q.data){ stopQrScan(); applyQr(q.data); return; }
+      }
+      qrRAF=requestAnimationFrame(tick);
+    };
+    qrRAF=requestAnimationFrame(tick);
+  }catch(e){ if(msg) msg.textContent='Camera not available ('+(e.message||e)+') — use "Use a photo instead".'; }
+}
+function stopQrScan(){
+  if(qrRAF){ cancelAnimationFrame(qrRAF); qrRAF=null; }
+  if(qrStream){ qrStream.getTracks().forEach(t=>t.stop()); qrStream=null; }
+  const box=document.getElementById('qrScanBox'); if(box) box.style.display='none';
+}
+async function qrFromFile(inp){
+  const msg=document.getElementById('qrMsg');
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  try{ await qrLibLoad(); }catch(e){ if(msg) msg.textContent=e.message; return; }
+  const img=new Image();
+  img.onload=()=>{
+    URL.revokeObjectURL(img.src);
+    // Try a few scales — full-receipt photos often decode better downscaled, tight close-ups as-is.
+    for(const sc of [1,0.5,0.25,2]){
+      const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(img.width*sc)); cv.height=Math.max(1,Math.round(img.height*sc));
+      const cx=cv.getContext('2d'); cx.drawImage(img,0,0,cv.width,cv.height);
+      const im=cx.getImageData(0,0,cv.width,cv.height);
+      const q=window.jsQR(im.data,im.width,im.height);
+      if(q && q.data){ stopQrScan(); applyQr(q.data); return; }
+    }
+    if(msg) msg.textContent='No QR found in that photo — try a closer, sharper shot of just the QR square.';
+  };
+  img.src=URL.createObjectURL(f);
 }
 
 /* ---------- SCHEDULE (was "Staff"; item 9: renamed + only current month's timetable shown) ---------- */
@@ -1084,6 +1190,14 @@ async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:
   const appleCap=document.createElement('meta'); appleCap.name='apple-mobile-web-app-capable'; appleCap.content='yes'; document.head.appendChild(appleCap);
   document.getElementById('nav').style.display='flex';
   try{ currentUser = JSON.parse(sessionStorage.getItem('mib_curuser')||'null'); }catch(e){ currentUser=null; }
+  // Fix (2026-07-07): if the msal script failed to load, initMsal() threw "msal is not defined"
+  // OUTSIDE any try/catch and boot died silently — blank page, no error (same class as the
+  // 2026-07-06 cdnjs outage). Wait briefly for the fallback CDN, then show a real error.
+  for(let i=0;i<20 && typeof msal==='undefined';i++) await new Promise(r=>setTimeout(r,250));
+  if(typeof msal==='undefined'){
+    M.innerHTML='<div class="err">Could not load the Microsoft sign-in library from either CDN (jsDelivr or unpkg). This is a network/CDN problem, not an app problem — check the internet connection and reload the page.</div>';
+    return;
+  }
   if(!initMsal()){ go('set'); return; }
   try{
     const resp=await msalApp.handleRedirectPromise();
