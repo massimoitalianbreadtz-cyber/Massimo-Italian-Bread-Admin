@@ -173,15 +173,45 @@ async function g(path, opts={}){
   if(!r.ok){ const b=await r.text(); throw new Error('Graph '+r.status+' on '+path.slice(0,80)+': '+b.slice(0,200)); }
   return r.status===204?null:r.json();
 }
+function sleep(ms){ return new Promise(res=>setTimeout(res,ms)); }
+// Fix (2026-07-07, Gu 429 report): Excel's Graph API throttles workbook writes more tightly than
+// general Graph calls. gbatch used to give up on the first 429 with no retry, so a full day's worth
+// of deliveries entered then uploaded together would fail outright — and immediate manual retries
+// often hit the same throttle window again. Now: (1) small delay between chunks so bursts of writes
+// don't stack up, (2) any sub-request that comes back 429 is retried up to 3x, honoring Graph's
+// Retry-After header when present, else exponential backoff (1s/2s/4s).
 async function gbatch(reqs){ // reqs: [{id,method,url,body?}] max 20 per call
   const t=await getToken(); const out={};
   for(let i=0;i<reqs.length;i+=20){
+    if(i>0) await sleep(250); // pace successive chunks
     const chunk=reqs.slice(i,i+20).map(r=>({id:r.id,method:r.method,url:r.url,body:r.body,headers:r.body?{'Content-Type':'application/json'}:undefined}));
-    const r=await fetch(GRAPH+'/$batch',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({requests:chunk})});
-    const j=await r.json();
+    const j=await gbatchOnce(t,chunk);
     for(const resp of j.responses) out[resp.id]=resp;
   }
+  // Retry any individually-throttled sub-requests
+  let attempt=0;
+  let toRetry=Object.entries(out).filter(([id,r])=>r.status===429);
+  while(toRetry.length && attempt<3){
+    attempt++;
+    const waitMs = Math.max(...toRetry.map(([id,r])=>{
+      const ra=r.headers&&(r.headers['Retry-After']||r.headers['retry-after']);
+      return ra ? Number(ra)*1000 : 1000*Math.pow(2,attempt-1);
+    }));
+    await sleep(waitMs);
+    const idsToRetry=new Set(toRetry.map(([id])=>id));
+    const retryReqs=reqs.filter(r=>idsToRetry.has(r.id)).map(r=>({id:r.id,method:r.method,url:r.url,body:r.body,headers:r.body?{'Content-Type':'application/json'}:undefined}));
+    for(let i=0;i<retryReqs.length;i+=20){
+      const chunk=retryReqs.slice(i,i+20);
+      const j=await gbatchOnce(t,chunk);
+      for(const resp of j.responses) out[resp.id]=resp;
+    }
+    toRetry=Object.entries(out).filter(([id,r])=>r.status===429);
+  }
   return out;
+}
+async function gbatchOnce(t,chunk){
+  const r=await fetch(GRAPH+'/$batch',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({requests:chunk})});
+  return r.json();
 }
 // Restored (2026-07-06): these two were added 2026-07-04 (commits fc93515 etc.) to support linking
 // the Master file / timetables folder via a pasted OneDrive share link instead of only by name
