@@ -972,7 +972,20 @@ async function saveExpense(rowNum){
   const fails=Object.values(res).filter(r=>r.status>=400);
   hide();
   if(fails.length){ alert(fails.length+' field(s) failed to save. Check the file is not locked and retry.'); }
-  else { cache.exp=null; await renderExpenses(); }
+  else {
+    // Feature (2026-07-07, Gu request): file the receipt photo captured during QR scan/upload into
+    // Expense Receipts\<Month Year>\ now that the row is confirmed saved — never before, so an
+    // abandoned form never leaves an orphan photo with no matching expense row.
+    if(capturedReceiptBlob){
+      const photoBlob=capturedReceiptBlob, photoCode=lastReceiptCode;
+      capturedReceiptBlob=null; lastReceiptCode=null;
+      show('Filing receipt photo…');
+      try{ await fileReceiptPhoto(dateStr,provider,photoCode,photoBlob); }
+      catch(e){ alert('Expense saved, but filing the receipt photo failed: '+(e.message||e)+'\n\nYou can add it to the Expense Receipts folder manually if needed.'); }
+      hide();
+    }
+    cache.exp=null; await renderExpenses();
+  }
 }
 
 /* ---------- QR SCAN (2026-07-07): scan the TRA EFD QR on a supplier receipt to prefill the
@@ -982,7 +995,15 @@ async function saveExpense(rowNum){
    The amounts / TIN / seller name are NOT in the QR — they are on TRA's verification page, which
    a browser app cannot fetch cross-origin (CORS). So those fields stay manual, and the app offers
    a one-tap link to the TRA page to check them. ---------- */
-let qrStream=null, qrRAF=null;
+let qrStream=null, qrRAF=null, capturedReceiptBlob=null, lastReceiptCode=null;
+const RECEIPT_PHOTO_MAXDIM=1600; // cap long edge so simple Graph upload (<4MB) always succeeds
+function canvasToCappedBlob(srcCanvas,cb){
+  const scale=Math.min(1, RECEIPT_PHOTO_MAXDIM/Math.max(srcCanvas.width,srcCanvas.height));
+  if(scale>=1){ srcCanvas.toBlob(cb,'image/jpeg',0.85); return; }
+  const out=document.createElement('canvas'); out.width=Math.round(srcCanvas.width*scale); out.height=Math.round(srcCanvas.height*scale);
+  out.getContext('2d').drawImage(srcCanvas,0,0,out.width,out.height);
+  out.toBlob(cb,'image/jpeg',0.85);
+}
 function qrLibLoad(){ // jsQR pinned to 1.4.0, dual-CDN (lesson from the 2026-07-06 cdnjs outage:
   // never single-source a critical script from one CDN)
   if(window.jsQR) return Promise.resolve();
@@ -997,19 +1018,23 @@ function qrLibLoad(){ // jsQR pinned to 1.4.0, dual-CDN (lesson from the 2026-07
 function applyQr(text){
   const out=document.getElementById('qrResult'); if(!out) return;
   const m=String(text).match(/verify\.tra\.go\.tz\/([A-Za-z0-9]+)_(\d{2})(\d{2})(\d{2})/i);
+  const filedNote='<br>📎 This photo will be filed to Expense Receipts (by month) when you save this expense.';
   if(m){
     const code=m[1].toUpperCase();
+    lastReceiptCode=code;
     const rec=document.getElementById('exReceipt'); if(rec) rec.value=code;
     out.innerHTML=`<div class="ok">TRA receipt code <b>${esc(code)}</b> (issued ${m[2]}:${m[3]}:${m[4]}) filled into Receipt n.<br>
     Amounts still need typing — they are only on TRA's page, which the app can't read automatically.<br>
-    <a href="${esc(text)}" target="_blank">Open this receipt on TRA to check ↗</a></div>`;
+    <a href="${esc(text)}" target="_blank">Open this receipt on TRA to check ↗</a>${filedNote}</div>`;
   } else {
+    lastReceiptCode=null;
     const rec=document.getElementById('exReceipt'); if(rec) rec.value=String(text).slice(0,60);
-    out.innerHTML=`<div class="review">A QR was read, but it isn't a TRA verification link — its raw text was placed in Receipt n. Check it looks right: ${esc(String(text).slice(0,120))}</div>`;
+    out.innerHTML=`<div class="review">A QR was read, but it isn't a TRA verification link — its raw text was placed in Receipt n. Check it looks right: ${esc(String(text).slice(0,120))}${filedNote}</div>`;
   }
 }
 async function startQrScan(){
   const msg=document.getElementById('qrMsg'); if(msg) msg.textContent='';
+  capturedReceiptBlob=null; lastReceiptCode=null; // fresh attempt — discard any previous capture
   try{ await qrLibLoad(); }catch(e){ if(msg) msg.textContent=e.message; return; }
   const box=document.getElementById('qrScanBox'); box.style.display='';
   const video=document.getElementById('qrVideo');
@@ -1024,7 +1049,10 @@ async function startQrScan(){
         cx.drawImage(video,0,0);
         const im=cx.getImageData(0,0,cv.width,cv.height);
         const q=window.jsQR(im.data,im.width,im.height);
-        if(q && q.data){ stopQrScan(); applyQr(q.data); return; }
+        if(q && q.data){
+          canvasToCappedBlob(cv,b=>{ if(b) capturedReceiptBlob=b; }); // save the frame that decoded successfully
+          stopQrScan(); applyQr(q.data); return;
+        }
       }
       qrRAF=requestAnimationFrame(tick);
     };
@@ -1039,10 +1067,18 @@ function stopQrScan(){
 async function qrFromFile(inp){
   const msg=document.getElementById('qrMsg');
   const f=inp.files&&inp.files[0]; if(!f) return;
+  capturedReceiptBlob=null; lastReceiptCode=null; // fresh attempt — discard any previous capture
   try{ await qrLibLoad(); }catch(e){ if(msg) msg.textContent=e.message; return; }
   const img=new Image();
   img.onload=()=>{
     URL.revokeObjectURL(img.src);
+    // Storage copy captured up front, independent of the decode-attempt scales below — a photo
+    // is filed whenever one is taken, whether or not a QR is actually found in it.
+    const scv=document.createElement('canvas');
+    const cap=Math.min(1, RECEIPT_PHOTO_MAXDIM/Math.max(img.width,img.height));
+    scv.width=Math.max(1,Math.round(img.width*cap)); scv.height=Math.max(1,Math.round(img.height*cap));
+    scv.getContext('2d').drawImage(img,0,0,scv.width,scv.height);
+    scv.toBlob(b=>{ if(b) capturedReceiptBlob=b; },'image/jpeg',0.85);
     // Try a few scales — full-receipt photos often decode better downscaled, tight close-ups as-is.
     for(const sc of [1,0.5,0.25,2]){
       const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(img.width*sc)); cv.height=Math.max(1,Math.round(img.height*sc));
@@ -1051,9 +1087,58 @@ async function qrFromFile(inp){
       const q=window.jsQR(im.data,im.width,im.height);
       if(q && q.data){ stopQrScan(); applyQr(q.data); return; }
     }
-    if(msg) msg.textContent='No QR found in that photo — try a closer, sharper shot of just the QR square.';
+    if(msg) msg.textContent='No QR found in that photo — the photo will still be filed to Expense Receipts when you save, but the receipt code/amounts need typing manually. Try a closer, sharper shot if you also want the code auto-filled.';
   };
   img.src=URL.createObjectURL(f);
+}
+/* ---------- RECEIPT PHOTO FILING (2026-07-07, Gu request): whenever a receipt photo is
+   scanned/captured above (camera or "Use a photo instead"), file it into OneDrive under
+   Expense Receipts\<Month Year>\ once the expense is actually saved — not before, so nothing
+   gets filed for an abandoned form. Folder is resolved by name search (like the retailer
+   receipt-PDF folders already do) and cached in S.pdfFolders, no new Settings field needed.
+   Confirmed live folder names already match "<Month> <Year>" exactly (e.g. "July 2026"). ---------- */
+function monthFolderName(dateStr){
+  const [y,m]=dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y,m-1,1)).toLocaleString('en-GB',{month:'long',year:'numeric',timeZone:'UTC'});
+}
+async function resolveExpenseReceiptsFolder(force){
+  if(S.pdfFolders['ExpenseReceipts'] && !force) return S.pdfFolders['ExpenseReceipts'];
+  const r=await g(`/me/drive/root/search(q='Expense Receipts')?$select=id,name,folder&$top=10`);
+  const hit=(r.value||[]).find(x=>x.folder && x.name==='Expense Receipts');
+  if(!hit) return null;
+  S.pdfFolders['ExpenseReceipts']=hit.id; LSset('pdfFolders',JSON.stringify(S.pdfFolders));
+  return hit.id;
+}
+async function ensureMonthFolder(receiptsFolderId,monthName){
+  const kids=await g(`/me/drive/items/${receiptsFolderId}/children?$select=id,name,folder&$top=200`);
+  const hit=(kids.value||[]).find(x=>x.folder && x.name===monthName);
+  if(hit) return hit.id;
+  const created=await g(`/me/drive/items/${receiptsFolderId}/children`,{method:'POST',body:JSON.stringify({name:monthName,folder:{},'@microsoft.graph.conflictBehavior':'rename'})});
+  return created.id;
+}
+async function uploadReceiptPhoto(folderId,filename,blob){
+  const t=await getToken();
+  const r=await fetch(`${GRAPH}/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/content`,{method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':'image/jpeg'},body:blob});
+  if(!r.ok){ const b=await r.text(); throw new Error('Photo upload failed: HTTP '+r.status+' '+b.slice(0,200)); }
+  return r.json();
+}
+async function fileReceiptPhoto(dateStr,provider,code,blob){
+  let folderId=await resolveExpenseReceiptsFolder();
+  if(!folderId) throw new Error('Could not find a folder named exactly "Expense Receipts" in OneDrive.');
+  const monthName=monthFolderName(dateStr);
+  const safeProvider=(provider||'receipt').replace(/[\\/:*?"<>|]+/g,' ').trim().replace(/\s+/g,' ');
+  const filename=`${dateStr}_${safeProvider}${code?('_'+code):''}.jpg`;
+  try{
+    const monthId=await ensureMonthFolder(folderId,monthName);
+    await uploadReceiptPhoto(monthId,filename,blob);
+  }catch(e){
+    if(/itemNotFound/.test(e.message)){ // cached folder ID may be stale — clear and retry once
+      folderId=await resolveExpenseReceiptsFolder(true);
+      if(!folderId) throw e;
+      const monthId=await ensureMonthFolder(folderId,monthName);
+      await uploadReceiptPhoto(monthId,filename,blob);
+    } else throw e;
+  }
 }
 
 /* ---------- SCHEDULE (was "Staff"; item 9: renamed + only current month's timetable shown) ---------- */
@@ -1116,7 +1201,7 @@ function renderSettings(){
   <div class="row">${account?`<button class="btn sm sec" ${settingsWriteAllowed?'':'disabled'} onclick="msalApp.logoutRedirect()">Sign out</button>`:(S.clientId?'<button class="btn sm" onclick="login()">Sign in</button>':'')}</div>
   </div>
   ${currentUser && can('manageUsers') ? renderUserAdmin() : ''}
-  <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, add data to blank pre-formatted rows on the [2026 Expenditure] sheet, and read (never write) everything else. It never deletes rows, never edits formulas, never touches other sheets. It no longer writes cell colours — Income is read-only.</p></div>`;
+  <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, add data to blank pre-formatted rows on the [2026 Expenditure] sheet, file scanned receipt photos into the Expense Receipts folder (by month) when an expense is saved, and read (never write) everything else. It never deletes rows, never edits formulas, never touches other sheets. It no longer writes cell colours — Income is read-only.</p></div>`;
 }
 /* ---------- USER ADMIN (item 1, Admin-only) ---------- */
 function renderUserAdmin(){
