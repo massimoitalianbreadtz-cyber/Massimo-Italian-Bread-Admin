@@ -24,13 +24,13 @@
 --font-display:'Bradley Hand','Caveat','Segoe Script',cursive;--font-body:'Book Antiqua','Palatino Linotype','Cormorant Garamond',Georgia,serif}
 *{box-sizing:border-box;margin:0;padding:0;font-family:var(--font-body)}
 body{background:var(--bg);color:var(--ink);padding-bottom:86px}
-header{background:linear-gradient(135deg,#141313 0%,#2a1414 60%,#3d1010 100%);color:#FFFDFD;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10;border-bottom:3px solid var(--brand);box-shadow:0 2px 12px rgba(20,19,19,.25)}
+header{background:#FFFFFF;color:var(--ink);padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10;border-bottom:3px solid var(--brand);box-shadow:0 2px 12px rgba(20,19,19,.08)}
 header .hbrand{display:flex;align-items:center;gap:12px}
-header .logochip{background:var(--cream);border-radius:12px;padding:5px 8px;display:flex;align-items:center;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+header .logochip{background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:5px 8px;display:flex;align-items:center;box-shadow:0 1px 4px rgba(0,0,0,.08)}
 header img.logo{height:38px;width:auto;display:block}
-header h1{font-size:22px;font-weight:600;font-family:var(--font-display);letter-spacing:.3px}
-header .sub{font-size:11px;opacity:.75;font-style:italic}
-header .userchip{font-size:11px;opacity:.85;cursor:pointer;text-decoration:underline}
+header h1{font-size:22px;font-weight:600;font-family:var(--font-display);letter-spacing:.3px;color:var(--ink)}
+header .sub{font-size:11px;opacity:.85;font-style:italic;color:var(--brand)}
+header .userchip{font-size:11px;opacity:.85;cursor:pointer;text-decoration:underline;color:var(--brand)}
 main{padding:12px;max-width:900px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px rgba(20,19,19,.06)}
 .card h2{font-size:18px;color:var(--brand);margin-bottom:10px;font-family:var(--font-display);font-weight:600;letter-spacing:.3px;border-bottom:2px solid var(--line);padding-bottom:6px}
@@ -89,7 +89,7 @@ h3.wk{font-size:13px;margin:12px 0 4px;color:var(--brown)}
 </style>
 </head>
 <body>
-<header><div class="hbrand"><div class="logochip"><img class="logo" id="logoimg" alt="Massimo Italian Bread"></div><div><h1 id="title">Massimo Italian Bread</h1><div class="sub" id="subtitle">Salty Water administration</div><div class="userchip" id="userchip" style="display:none" onclick="switchUser()"></div></div></div><button class="btn sm sec" id="syncBtn" onclick="fullSync()" style="display:none;background:transparent;color:#FFFDFD;border-color:#FFFDFD">⟳ Sync</button></header>
+<header><div class="hbrand"><div class="logochip"><img class="logo" id="logoimg" alt="Massimo Italian Bread"></div><div><h1 id="title">Salty Water Company Ltd.</h1><div class="sub" id="subtitle">Massimo Italian Bread administration</div><div class="userchip" id="userchip" style="display:none" onclick="switchUser()"></div></div></div><button class="btn sm sec" id="syncBtn" onclick="fullSync()" style="display:none">⟳ Sync</button></header>
 <div id="loader"><div class="spin"></div><div id="loadmsg">Loading…</div></div>
 <main id="main"></main>
 <nav id="nav" style="display:none">
@@ -117,17 +117,32 @@ let S = { fileId: LS('fileId'), fileDriveId: LS('fileDriveId')||null, tfolderId:
    Settings. Set up the same user list on every device during install so the same names/PINs work
    everywhere. See the instructions guide for the full explanation. */
 const ROLES = {
-  admin:  {label:'Admin',  canWrite:true,  canManageUsers:true},
-  editor: {label:'Editor', canWrite:true,  canManageUsers:false},
-  viewer: {label:'Viewer', canWrite:false, canManageUsers:false}
+  admin:  {label:'Admin',  canWrite:true,  canManageUsers:true, canWriteExpenses:true, restrictToExpenses:false},
+  editor: {label:'Editor', canWrite:true,  canManageUsers:false, canWriteExpenses:true, restrictToExpenses:false},
+  viewer: {label:'Viewer', canWrite:false, canManageUsers:false, canWriteExpenses:false, restrictToExpenses:false},
+  // Added 2026-07-08 (Gu request): a device clerk who only records expenses by hand shouldn't see or
+  // touch Deliveries/Invoices/Income/Schedule/Settings at all — just Expenses. canWrite stays false
+  // (so Deliveries/Settings edit controls stay locked exactly like a Viewer), but canWriteExpenses is
+  // true so the Expenses "Add new expense" form is unlocked. restrictToExpenses hides the other nav
+  // tabs and forces this role straight to the Expenses page — see applyRoleNav() and render().
+  expenseclerk: {label:'Expense Clerk', canWrite:false, canManageUsers:false, canWriteExpenses:true, restrictToExpenses:true}
 };
 function getUsers(){ try{ return JSON.parse(localStorage.getItem('mib_users')||'[]'); }catch(e){ return []; } }
 function setUsers(u){ localStorage.setItem('mib_users', JSON.stringify(u)); }
 let currentUser = null; // {name, role} for this browser tab session
-function can(action){ // action: 'write' | 'manageUsers'
+function can(action){ // action: 'write' | 'manageUsers' | 'writeExpenses'
   if(!currentUser) return false;
   const r = ROLES[currentUser.role] || ROLES.viewer;
-  return action==='manageUsers' ? r.canManageUsers : r.canWrite;
+  if(action==='manageUsers') return r.canManageUsers;
+  if(action==='writeExpenses') return r.canWrite || r.canWriteExpenses;
+  return r.canWrite;
+}
+// Hides every nav tab except Expenses for a restricted role (e.g. Expense Clerk), shows all otherwise.
+function applyRoleNav(){
+  const restricted = currentUser && ROLES[currentUser.role]?.restrictToExpenses;
+  document.querySelectorAll('nav button').forEach(b=>{
+    b.style.display = (!restricted || b.dataset.p==='exp') ? '' : 'none';
+  });
 }
 const PAID='#92D050', PEND='#FFC000';
 let cache = { dateIndex:null, exp:null, invRows:null, invFills:{}, monthBlocks:{}, pdfLatest:null, recInv:null };
@@ -353,6 +368,10 @@ async function render(){
     if(!currentUser){ return renderPinGate(); }
     document.getElementById('userchip').style.display='';
     document.getElementById('userchip').textContent=currentUser.name+' ('+ROLES[currentUser.role].label+') · switch';
+    applyRoleNav();
+    // Restricted roles (Expense Clerk) only ever see the Expenses page, even if 'page' was left on
+    // something else from a previous session/tab state.
+    if(ROLES[currentUser.role]?.restrictToExpenses && page!=='exp'){ page='exp'; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p==='exp')); }
     if(page==='home') return await renderHome();
     if(page==='deliv') return await renderDeliv();
     if(page==='invoices') return await renderInvoices();
@@ -901,15 +920,23 @@ async function renderExpenses(){
   const V=r.values||[];
   const today=new Date(); const mStart=new Date(today.getFullYear(),today.getMonth(),1), mEnd=new Date(today.getFullYear(),today.getMonth()+1,0);
   const monthName=today.toLocaleString('en-GB',{month:'long',year:'numeric'});
-  const filled=[], blanks=[];
+  const filled=[];
+  // Fix (2026-07-08, Gu report): the old blank-row finder required a row to ALREADY have a date
+  // within the current month before it would even be considered a candidate — but genuinely blank
+  // pre-formatted template rows never have a date pre-typed (only formulas/formatting are copied
+  // down ahead of time), so no row could ever qualify and Gu always saw "No blank pre-formatted row
+  // is ready" even right after copying formulas. Now: the "filled" table (this month's list) still
+  // filters by date as before, but the next-available-row search is separate and just looks for the
+  // first row with no Date AND no Type at all, in row order, regardless of month.
+  let nextBlank=null;
   for(let i=1;i<V.length;i++){
     const row=V[i]; const d=excelDate(row[0]);
-    if(!d || d<mStart || d>mEnd) continue;
     const rowNum=i+1;
-    if(row[1]){ filled.push({rowNum,row,d}); } else { blanks.push({rowNum,row,d}); }
+    if(d && d>=mStart && d<=mEnd && row[1]) filled.push({rowNum,row,d});
+    if(nextBlank===null && !row[0] && !row[1]) nextBlank={rowNum,row,d:null};
   }
-  expRowMeta = blanks.length? blanks[0] : null;
-  const writeAllowed=can('write');
+  expRowMeta = nextBlank;
+  const writeAllowed=can('writeExpenses');
   M.innerHTML=`<div class="card"><h2>Expenses — ${monthName}</h2>
   <p class="muted">Shows only the current month, like the Excel sheet. Once an entry is saved it becomes read-only here — correct mistakes in Excel.</p>
   ${filled.length?`<div style="overflow-x:auto"><table><tr><th>Date</th><th>Type</th><th>Provider</th><th>Detail</th><th class="num">Price</th><th class="num">VAT</th><th class="num">Total</th><th>Receipt</th><th>TIN/VRN</th><th>How</th></tr>
@@ -918,8 +945,8 @@ async function renderExpenses(){
   </table></div>`:'<p class="muted">No expenses recorded yet this month.</p>'}
   </div>
   <div class="card"><h2>Add new expense</h2>
-  ${!writeAllowed?'<p class="muted">Your role (Viewer) can’t add expenses.</p>': !expRowMeta ? `<p class="err">No blank pre-formatted row is ready for ${monthName} in the Master's [2026 Expenditure] sheet yet. In Excel, copy the last row's formula down a few more rows, save, then come back and Sync.</p>` : `
-  ${ymd(expRowMeta.d)!==ymd(today)?`<p class="muted">Note: the next ready row in the Master was originally pre-dated ${ymd(expRowMeta.d)} (the template hasn't been extended past there yet) — the date below defaults to today instead; change it if this expense is actually for a different day.</p>`:''}
+  ${!writeAllowed?`<p class="muted">Your role (${ROLES[currentUser.role]?.label||''}) can’t add expenses.</p>`: !expRowMeta ? `<p class="err">No blank pre-formatted row is left in the Master's [2026 Expenditure] sheet. In Excel, copy the last row's formula down a few hundred more rows, save, then come back and Sync.</p>` : `
+  ${expRowMeta.d && ymd(expRowMeta.d)!==ymd(today)?`<p class="muted">Note: the next ready row in the Master was originally pre-dated ${ymd(expRowMeta.d)} (the template hasn't been extended past there yet) — the date below defaults to today instead; change it if this expense is actually for a different day.</p>`:''}
   <div class="row" style="margin:4px 0 2px"><button class="btn sm sec" onclick="startQrScan()">📷 Scan receipt QR (TRA)</button><span id="qrMsg" class="muted"></span></div>
   <div id="qrScanBox" style="display:none"><video id="qrVideo" style="width:100%;max-height:320px;border-radius:12px;background:#000" playsinline muted></video>
     <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="stopQrScan()">Cancel</button>
@@ -1211,7 +1238,7 @@ function renderUserAdmin(){
   ${users.map((u,i)=>`<div class="row" style="margin-bottom:6px"><div style="flex:1">${esc(u.name)} <span class="muted">(${ROLES[u.role]?.label||u.role}, PIN ${esc(u.pin)})</span></div><button class="btn sm sec" onclick="removeUser(${i})">Remove</button></div>`).join('')||'<p class="muted">No users yet.</p>'}
   <label style="margin-top:12px">Add user</label>
   <div class="row"><input id="nuName" placeholder="Name" style="flex:2"><input id="nuPin" placeholder="4-digit PIN" maxlength="4" inputmode="numeric" style="flex:1">
-  <select id="nuRole" style="flex:1"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
+  <select id="nuRole" style="flex:1"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="expenseclerk">Expense Clerk</option><option value="admin">Admin</option></select>
   <button class="btn sm" onclick="addUser()">Add</button></div>
   </div>`;
 }
