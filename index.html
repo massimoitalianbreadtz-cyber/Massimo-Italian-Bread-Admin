@@ -6,14 +6,11 @@
 <meta name="theme-color" content="#A71B1B">
 <title>Massimo Admin</title>
 <link rel="manifest" id="manifest">
-<!-- Switched from cdnjs to jsDelivr: cdnjs was intermittently returning 503 for this exact file,
-     which silently broke Sign-in (msal never loaded, so "Sign in" did nothing) with no visible
-     error until the login() error handling was added. jsDelivr verified reliable at time of fix. -->
-<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"
-        onerror="var s=document.createElement('script');s.src='https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js';document.head.appendChild(s)"></script>
-<!-- Fallback above (2026-07-07): if jsDelivr fails like cdnjs did on 2026-07-06, the same pinned
-     version is loaded from unpkg. boot() also waits briefly for msal and shows a visible error
-     instead of dying silently if BOTH CDNs are down. -->
+<!-- Plan B A11 (2026-09-25): the sign-in library now ships INSIDE the repo (msal-browser.min.js,
+     @azure/msal-browser 2.38.3, sha256 595c0a2d...), so a CDN outage like 2026-07-06 can no longer
+     break sign-in. jsDelivr then unpkg remain as fallbacks if the local copy is ever missing. -->
+<script src="msal-browser.min.js"
+        onerror="var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js';s.onerror=function(){var u=document.createElement('script');u.src='https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js';document.head.appendChild(u)};document.head.appendChild(s)"></script>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
@@ -89,7 +86,7 @@ h3.wk{font-size:13px;margin:12px 0 4px;color:var(--brown)}
 </style>
 </head>
 <body>
-<header><div class="hbrand"><div class="logochip"><img class="logo" id="logoimg" alt="Massimo Italian Bread"></div><div><h1 id="title">Salty Water Company Ltd.</h1><div class="sub" id="subtitle">Massimo Italian Bread administration</div><div class="userchip" id="userchip" style="display:none" onclick="switchUser()"></div></div></div><button class="btn sm sec" id="syncBtn" onclick="fullSync()" style="display:none">⟳ Sync</button></header>
+<header><div class="hbrand"><div class="logochip"><img class="logo" id="logoimg" alt="Massimo Italian Bread"></div><div><h1 id="title">Salty Water Company Ltd.</h1><div class="sub" id="subtitle">Massimo Italian Bread administration</div><div class="userchip" id="userchip" style="display:none" onclick="switchUser()"></div><div class="userchip" id="qcount" style="display:none;color:var(--orange)" onclick="flushQueue()" title="Tap to send now"></div></div></div><button class="btn sm sec" id="syncBtn" onclick="fullSync()" style="display:none">⟳ Sync</button></header>
 <div id="loader"><div class="spin"></div><div id="loadmsg">Loading…</div></div>
 <main id="main"></main>
 <nav id="nav" style="display:none">
@@ -407,9 +404,15 @@ function renderLogin(){
 }
 /* ---------- PIN GATE (item 1: who is using the app right now) ---------- */
 function switchUser(){ currentUser=null; render(); }
-function renderPinGate(){
+let pinUsers=[];
+async function renderPinGate(){
   hide();
-  const users=getUsers();
+  // Plan B (A5): the same users/PINs on every device, from OneDrive _config/users.json (hashed PINs).
+  // Falls back to this device's own list if the shared file does not exist yet or there is no signal.
+  let shared=null;
+  if(saveMode()!=='master'){ M.innerHTML='<div class="card"><p class="muted">Loading users…</p></div>'; shared=await loadSharedUsers(); }
+  const users=(shared&&shared.users&&shared.users.length)?shared.users.map(u=>({...u,shared:true})):getUsers();
+  pinUsers=users;
   if(!users.length){
     M.innerHTML=`<div class="card pinpad" style="text-align:center;padding:30px 20px">
     <h2 style="border:none">First-time setup</h2>
@@ -433,10 +436,11 @@ function renderPinGate(){
   </div>`;
 }
 let pinSelIdx=null;
-function selectUser(i){ pinSelIdx=i; const u=getUsers()[i]; document.getElementById('pinfor').textContent=u.name; document.getElementById('pinstep').style.display=''; document.getElementById('pinval').focus(); }
-function confirmPin(){
-  const u=getUsers()[pinSelIdx]; const v=document.getElementById('pinval').value.trim();
-  if(v!==u.pin){ const e=document.getElementById('pinerr'); e.textContent='Wrong PIN, try again.'; e.style.display=''; return; }
+function selectUser(i){ pinSelIdx=i; const u=pinUsers[i]; document.getElementById('pinfor').textContent=u.name; document.getElementById('pinstep').style.display=''; document.getElementById('pinval').focus(); }
+async function confirmPin(){
+  const u=pinUsers[pinSelIdx]; const v=document.getElementById('pinval').value.trim();
+  const ok = u.shared ? ((await sha256(u.salt+':'+v))===u.pin_hash) : (v===u.pin);
+  if(!ok){ const e=document.getElementById('pinerr'); e.textContent='Wrong PIN, try again.'; e.style.display=''; return; }
   currentUser={name:u.name, role:u.role}; sessionStorage.setItem('mib_curuser', JSON.stringify(currentUser)); render();
 }
 function createFirstAdmin(){
@@ -517,7 +521,7 @@ async function renderHome(){
 
 /* ---------- DELIVERIES & RETURNS (item 4: lock Samples & Individual Client/Restaurant returns;
    item 5: review box shows exactly what will be saved) ---------- */
-let dWeek=null, dRows=null, dDirty={}, dMeta={};
+let dWeek=null, dRows=null, dDirty={}, dMeta={}, dLoadedAt=null;
 function rowLock(x){
   const type=String(x.type||'').trim().toLowerCase();
   const ctype=String(x.ctype||'').trim().toLowerCase();
@@ -533,6 +537,10 @@ async function renderDeliv(){
   const rr=rowsForRange(idx,dWeek,wEnd);
   dRows = rr ? await loadBlock(rr.r1,rr.r2) : [];
   dDirty={}; dMeta={};
+  // Plan B: who entered each line (from entry-file names). Never blocks the page if it fails.
+  let eInfo={}; dLoadedAt=new Date().toISOString();
+  if(saveMode()!=='master'){ try{ show('Checking entries from other devices…'); eInfo=await loadWeekEntryInfo(dWeek); }catch(e){ eInfo={}; } }
+  const queued=new Set((await qAll()).filter(q=>q.kind==='deliveries').map(q=>entryKey(q.body.date,q.body.client,q.body.product,q.body.type)));
   hide();
   const days={};
   dRows.forEach(x=>{ if(!x.date) return; const k=ymd(x.date); (days[k]=days[k]||[]).push(x); });
@@ -545,7 +553,7 @@ async function renderDeliv(){
   </div>
   <p class="muted" style="margin-top:8px">Edit <b>Deliveries</b> (plan, col G) and <b>Returns</b> (col H). Sold / Total are the Master's own formulas — read only.
   Rows marked <span class="pill un">Sample</span> or <span class="pill un">No returns</span> have Returns locked at 0, as agreed. Changed cells turn orange until saved.</p>
-  ${writeAllowed?`<div class="row" style="margin-top:8px"><button class="btn" id="saveBtn" onclick="saveDeliv()" disabled>Save changes to Master</button><span id="saveMsg" class="muted"></span></div>`:'<p class="muted">Your role (Viewer) can look but not edit. Ask an Admin/Editor to make changes.</p>'}
+  ${writeAllowed?`<div class="row" style="margin-top:8px"><button class="btn" id="saveBtn" onclick="saveDeliv()" disabled>${saveMode()==='entries'?'Save changes':saveMode()==='both'?'Save changes (Master + entries)':'Save changes to Master'}</button><span id="saveMsg" class="muted"></span></div>`:'<p class="muted">Your role (Viewer) can look but not edit. Ask an Admin/Editor to make changes.</p>'}
   </div>
   ${Object.keys(days).length? Object.entries(days).map(([k,rows],di)=>{
     const dayName=rows[0].day||new Date(k).toLocaleString('en-GB',{weekday:'long'});
@@ -558,7 +566,10 @@ async function renderDeliv(){
     <table><tr><th>Client</th><th>Product</th><th class="num">Deliv (G)</th><th class="num">Ret (H)</th><th class="num">Sold</th><th class="num">Price</th><th class="num">Total</th></tr>
     ${rows.map(x=>{
       const lock=rowLock(x);
-      dMeta[x.row]={name:x.name,product:x.product};
+      dMeta[x.row]={name:x.name,product:x.product,date:k,ctype:x.ctype,type:x.type,row:x.row,lock};
+      const ek=entryKey(k,x.name,x.product,x.type), ei=eInfo[ek];
+      const who = queued.has(ek) ? '<br><span class="pill pend" style="margin-top:2px">waiting to send</span>'
+        : ei ? `<br><small class="muted">✓ ${esc(ei.user)} · ${esc(ei.device)} ${esc(new Date(ei.created).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}))}</small>` : '';
       const price=Number(x.price)||0;
       // Live Sold/Total (item: totals didn't update as you typed). Sold = Delivered - Returned,
       // Total = Sold x Price, confirmed by Gu. This is a cosmetic client-side echo only — the
@@ -571,7 +582,7 @@ async function renderDeliv(){
         ? `<input class="cell locked" id="h${x.row}" value="${x.ret??0}" readonly title="${lock==='sample'?'Sample — no returns':'No returns for this client type'}">${(Number(x.ret)||0)!==0?'<br><span class="pill pend" style="margin-top:2px">Master shows non-zero — check</span>':''}`
         : `<input class="cell colH" id="h${x.row}" data-addr="H${x.row}" type="number" min="0" value="${x.ret??''}" ${writeAllowed?`onchange="markDirty(${x.row},'H',this)" oninput="liveCalc(${x.row},${price})" onkeydown="cellKeydown(event)"`:'readonly'}>`;
       const planCell = `<input class="cell colG" id="g${x.row}" data-addr="G${x.row}" type="number" min="0" value="${x.plan??''}" ${writeAllowed?`onchange="markDirty(${x.row},'G',this)" oninput="liveCalc(${x.row},${price}${lock?','+(Number(x.ret)||0):''})" onkeydown="cellKeydown(event)"`:'readonly'}>`;
-      return `<tr><td>${esc(x.name)}${lock?`<br><span class="pill un" style="margin-top:2px">${lock==='sample'?'Sample':'No returns'}</span>`:''}</td><td>${esc(x.product)}</td>
+      return `<tr><td>${esc(x.name)}${lock?`<br><span class="pill un" style="margin-top:2px">${lock==='sample'?'Sample':'No returns'}</span>`:''}${who}</td><td>${esc(x.product)}</td>
       <td class="num">${planCell}</td>
       <td class="num">${retCell}</td>
       <td class="num" id="sold${x.row}">${fmt(x.sold)}</td><td class="num">${fmt(x.price)}</td><td class="num" id="tot${x.row}">${fmt(x.total)}</td></tr>`;
@@ -620,39 +631,63 @@ async function saveDeliv(){
   if(!can('write')) return;
   const entries=Object.entries(dDirty);
   if(!entries.length) return;
-  show(`Saving ${entries.length} cell(s) to the Master…`);
-  // Fix (2026-07-07): saveDeliv runs from onclick, outside render()'s catch — a network drop
-  // mid-save used to leave the spinner stuck forever. Now any thrown error is surfaced.
-  let res;
-  try{
-    const reqs=entries.map(([addr,val],i)=>({id:'w'+i,method:'PATCH',
-      url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='${addr}')`,
-      body:{values:[[val]]}}));
-    res=await gbatch(reqs);
-  }catch(e){ hide(); alert('Save failed (nothing may have been written): '+(e.message||e)+'\n\nCheck your connection and try again.'); return; }
-  const fails=Object.entries(res).filter(([id,r])=>r.status>=400);
+  const mode=saveMode();
+  if(mode!=='master' && !needDevice()) return;
+  const rowsChanged=[...new Set(entries.map(([addr])=>Number(addr.slice(1))))];
+  // Plan B (A3): warn if another device saved one of these lines after this week was opened here.
+  if(mode!=='master'){
+    try{
+      show('Checking for newer entries from other devices…');
+      const info=await loadWeekEntryInfo(dWeek); hide();
+      const clash=rowsChanged.map(r=>{ const m=dMeta[r]; const ei=info[entryKey(m.date,m.name,m.product,m.type)];
+        return (ei && ei.device!==slug(deviceName()) && ei.created>dLoadedAt) ? `${m.date} ${m.name} — ${m.product}: ${ei.user} on ${ei.device} at ${new Date(ei.created).toLocaleTimeString()}` : null; }).filter(Boolean);
+      if(clash.length && !confirm('Updated on another device after you opened this week:\n\n'+clash.join('\n')+'\n\nSave yours anyway? Yours will replace them.')) return;
+    }catch(e){ hide(); }
+  }
+  let okRows=rowsChanged, fails=[];
+  if(mode!=='entries'){
+    show(`Saving ${entries.length} cell(s) to the Master…`);
+    // Fix (2026-07-07): saveDeliv runs from onclick, outside render()'s catch — a network drop
+    // mid-save used to leave the spinner stuck forever. Now any thrown error is surfaced.
+    let res;
+    try{
+      const reqs=entries.map(([addr,val],i)=>({id:'w'+i,method:'PATCH',
+        url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='${addr}')`,
+        body:{values:[[val]]}}));
+      res=await gbatch(reqs);
+    }catch(e){ hide(); alert('Save failed (nothing may have been written): '+(e.message||e)+'\n\nCheck your connection and try again.'); return; }
+    fails=Object.entries(res).filter(([id,r])=>r.status>=400);
+    const failedRows=new Set(fails.map(([id])=>Number(entries[Number(id.slice(1))][0].slice(1))));
+    okRows=rowsChanged.filter(r=>!failedRows.has(r));
+  }
+  // Plan B (A1/A2): one entry file per changed line, queued on this device then sent.
+  let queuedN=0;
+  if(mode!=='master'){
+    for(const r of okRows){
+      const m=dMeta[r]; if(!m) continue;
+      const gv=document.getElementById('g'+r)?.value, hv=document.getElementById('h'+r)?.value;
+      const body=deliveryEntry(m,gv,hv);
+      const parts=[m.name,m.product].concat(body.sample?['sample']:[]);
+      await enqueueEntry('deliveries',m.date,parts,body); queuedN++;
+    }
+  }
   hide();
   if(fails.length){
-    // Fix (Gu, 2026-07-06): this used to say only "N cell(s) failed" with no detail. Now it shows
-    // the actual Graph error per cell (e.g. file locked/423, conflict/409) so the real cause is
-    // visible instead of guessing. Since Excel will now stay closed during app use, this specific
-    // "file locked" cause should no longer come up — but any other failure will now say what it is.
+    // Fix (Gu, 2026-07-06): shows the actual Graph error per cell (e.g. locked/423, conflict/409).
     const detail=fails.map(([id,r])=>{
       const i=Number(id.slice(1)); const addr=entries[i][0];
       return addr+': HTTP '+r.status+(r.body&&r.body.error&&r.body.error.message?(' — '+r.body.error.message):'');
     }).join('\n');
-    alert(fails.length+' cell(s) failed to save:\n\n'+detail+'\n\nIf the Master is open in desktop Excel, close it and try again.');
-  } else {
-    // Fix (Gu, 2026-07-06): this used to re-fetch the ENTIRE week from Graph after every save just
-    // to redraw the screen — that full re-read was the slow part, not the save itself. Sold/Total
-    // are already showing the correct live-calculated values (see liveCalc), so just clear the
-    // dirty markers in place instead of reloading. Press Sync any time to pull the Master's own
-    // authoritative formula results.
-    entries.forEach(([addr])=>{ const el=document.querySelector(`input[data-addr="${addr}"]`); if(el) el.classList.remove('dirty'); });
-    dDirty={};
-    document.getElementById('saveBtn').disabled=true;
-    document.getElementById('saveMsg').textContent='✓ Saved by '+currentUser.name+' at '+new Date().toLocaleTimeString();
+    alert(fails.length+' cell(s) failed to save to the Master:\n\n'+detail+'\n\nIf the Master is open in desktop Excel, close it and try again.'+(queuedN?'\n\nThe other lines were saved.':''));
   }
+  // Fix (Gu, 2026-07-06): no full re-read after save — clear dirty markers in place.
+  const failedAddrs=new Set(fails.map(([id])=>entries[Number(id.slice(1))][0]));
+  entries.forEach(([addr])=>{ if(failedAddrs.has(addr)) return; const el=document.querySelector(`input[data-addr="${addr}"]`); if(el) el.classList.remove('dirty'); delete dDirty[addr]; });
+  const left=Object.keys(dDirty).length;
+  document.getElementById('saveBtn').disabled=!left;
+  if(!fails.length) document.getElementById('saveMsg').textContent='✓ Saved by '+currentUser.name+' at '+new Date().toLocaleTimeString()+(queuedN?` · ${queuedN} line(s) sending…`:'');
+  if(queuedN){ await qBadge(); flushQueue().then(async()=>{ const n=await qBadge(); const m=document.getElementById('saveMsg');
+    if(m && !fails.length) m.textContent='✓ Saved by '+currentUser.name+' at '+new Date().toLocaleTimeString()+(n?` · ${n} waiting to send (no signal?)`:' · entries sent'); }); }
 }
 
 /* ---------- INCOME (was "Invoices & Income" tab; item 6/7: renamed Income, now fully read-only —
@@ -976,6 +1011,7 @@ async function saveExpense(rowNum){
   const how=document.getElementById('exHow').value.trim();
   if(!provider||!price){ alert('Provider and Price are required.'); return; }
   const vatMsg = vatRaw===''?'no VAT':fmtT(Number(vatRaw));
+  if(saveMode()!=='master' && !needDevice()) return;
   if(!confirm(`Save this expense to row ${rowNum} of the Master?\n\n${type} — ${provider} — ${detail}\nPrice ${fmtT(price)}, ${vatMsg}`)) return;
   show('Saving expense…');
   // QC fix: building this from new Date(dateStr+'T00:00:00') and dividing by 86400000 only gave the
@@ -1000,6 +1036,14 @@ async function saveExpense(rowNum){
   hide();
   if(fails.length){ alert(fails.length+' field(s) failed to save. Check the file is not locked and retry.'); }
   else {
+    // Plan B (A4): the same expense as one entry file (queued, sent when there is signal).
+    if(saveMode()!=='master'){
+      const now=new Date(), vat=vatRaw===''?null:Number(vatRaw);
+      await enqueueEntry('expenses',dateStr,[type,provider],{id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,date:dateStr,category:type,
+        provider,details:detail,net:price,vat,total:price+(vat||0),receipt_no:receipt,tin_vrn:tin,how,
+        entered_by:currentUser?currentUser.name:'',device:deviceName(),at:now.toISOString(),master_row:rowNum,save_mode:saveMode(),app:APP_VERSION});
+      qBadge(); flushQueue();
+    }
     // Feature (2026-07-07, Gu request): file the receipt photo captured during QR scan/upload into
     // Expense Receipts\<Month Year>\ now that the row is confirmed saved — never before, so an
     // abandoned form never leaves an orphan photo with no matching expense row.
@@ -1228,7 +1272,18 @@ function renderSettings(){
   <div class="row">${account?`<button class="btn sm sec" ${settingsWriteAllowed?'':'disabled'} onclick="msalApp.logoutRedirect()">Sign out</button>`:(S.clientId?'<button class="btn sm" onclick="login()">Sign in</button>':'')}</div>
   </div>
   ${currentUser && can('manageUsers') ? renderUserAdmin() : ''}
-  <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, add data to blank pre-formatted rows on the [2026 Expenditure] sheet, file scanned receipt photos into the Expense Receipts folder (by month) when an expense is saved, and read (never write) everything else. It never deletes rows, never edits formulas, never touches other sheets. It no longer writes cell colours — Income is read-only.</p></div>`;
+  <div class="card"><h2>This device &amp; saving</h2>
+  <label>Device name (written into every entry)</label>
+  <div class="row"><input id="devName" value="${esc(deviceName())}" placeholder="e.g. phone-gu or tablet-massimo" ${settingsWriteAllowed?'':'disabled'} style="flex:1">
+  <button class="btn sm" ${settingsWriteAllowed?'':'disabled'} onclick="const v=slug(document.getElementById('devName').value.trim().toLowerCase());if(!v||v==='x'){alert('Enter a name');return;}LSset('deviceName',v);renderSettings()">Save</button></div>
+  <label>Save mode</label>
+  ${[['both','Master + entry files (parallel week)'],['entries','Entry files only (after the switchover)'],['master','Master only (old way — rollback)']].map(([v,l])=>`<div><label style="font-weight:400;margin:4px 0"><input type="radio" name="smode" value="${v}" ${saveMode()===v?'checked':''} ${settingsWriteAllowed&&currentUser&&can('manageUsers')?'':'disabled'} onchange="LSset('saveMode',this.value);renderSettings()" style="width:auto;margin-right:6px">${l}</label></div>`).join('')}
+  ${currentUser&&can('manageUsers')?'':'<p class="muted">Only an Admin can change the save mode.</p>'}
+  <p class="muted" style="margin-top:8px">Entry files go to <b>${esc((()=>{try{return (JSON.parse(LS('adminRoot')||'null')||{}).path||'(found at first save)';}catch(e){return '';}})())}/_data</b>. Waiting to send on this device: <b id="setq">…</b> <button class="btn sm sec" onclick="flushQueue().then(()=>renderSettings())">Send now</button></p>
+  <p class="muted">App version ${APP_VERSION}</p>
+  </div>
+  <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, add data to blank pre-formatted rows on the [2026 Expenditure] sheet, file scanned receipt photos into the Expense Receipts folder (by month) when an expense is saved, write NEW small entry files into the _data folder (never edits or deletes them), write the shared user list (_config/users.json, Admin only), and read (never write) everything else. It never deletes rows, never edits formulas, never touches other sheets. It no longer writes cell colours — Income is read-only.</p></div>`;
+  qAll().then(a=>{ const e=document.getElementById('setq'); if(e) e.textContent=a.length+(a.length&&a[0].lastErr?(' (last error: '+a[0].lastErr+')'):''); });
 }
 /* ---------- USER ADMIN (item 1, Admin-only) ---------- */
 function renderUserAdmin(){
@@ -1240,6 +1295,8 @@ function renderUserAdmin(){
   <div class="row"><input id="nuName" placeholder="Name" style="flex:2"><input id="nuPin" placeholder="4-digit PIN" maxlength="4" inputmode="numeric" style="flex:1">
   <select id="nuRole" style="flex:1"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="expenseclerk">Expense Clerk</option><option value="admin">Admin</option></select>
   <button class="btn sm" onclick="addUser()">Add</button></div>
+  <div class="row" style="margin-top:12px"><button class="btn sm" onclick="publishUsers()">Publish this list to all devices</button></div>
+  <p class="muted">Publishing makes the same names and PINs work on every device (PINs are stored scrambled). Re-publish after any change.</p>
   </div>`;
 }
 function addUser(){
@@ -1318,6 +1375,166 @@ async function linkFolderByShareUrl(){
   }catch(e){ o.innerHTML='<div class="err">Could not resolve link: '+esc(e.message)+'</div>'; }
 }
 
+/* ================= PLAN B (2026-09-25): ENTRY FILES + OFFLINE QUEUE + SHARED CONFIG =================
+   Every saved delivery line / expense is ALSO written as one small, never-edited JSON file to
+   OneDrive "Salty Water Administration\_data\..." (the folder above Receipts, found from the master's
+   own location). A correction is simply a newer file; the scripts (sw_data.py) keep the newest.
+   Save mode (Settings, A10):
+     both   = write the master cells exactly as before AND the entry files (parallel week) [default]
+     entries= entry files only (after the switchover)
+     master = master only (rollback, exactly the old app)
+   Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
+   offline and nothing is typed twice. The header shows "N waiting to send". */
+const APP_VERSION='2026-09-25-planB-1';
+const saveMode = () => LS('saveMode') || 'both';
+const deviceName = () => (LS('deviceName')||'').trim();
+function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
+function tsCompact(d){ return d.toISOString().replace(/[-:]/g,'').replace(/\.\d+Z$/,'Z'); }
+function rand4(){ return Math.random().toString(36).slice(2,6); }
+
+// --- where _data lives: the parent of the master's folder (Receipts -> Salty Water Administration)
+async function resolveAdminRoot(force){
+  if(!force){ try{ const c=JSON.parse(LS('adminRoot')||'null'); if(c&&c.id) return c; }catch(e){} }
+  const f=await g(`${fileItemPath()}?$select=id,parentReference`);
+  const driveId=f.parentReference.driveId, recId=f.parentReference.id;
+  const rec=await g(`/drives/${driveId}/items/${recId}?$select=id,name,parentReference`);
+  if(!rec.parentReference||!rec.parentReference.id) throw new Error('Could not find the folder above "'+rec.name+'".');
+  const root={driveId,id:rec.parentReference.id,path:(rec.parentReference.path||'').replace(/^.*root:/,'')};
+  LSset('adminRoot',JSON.stringify(root)); return root;
+}
+function relUrl(root,rel){ return `/drives/${root.driveId}/items/${root.id}:/${rel.split('/').map(encodeURIComponent).join('/')}:`; }
+async function putJsonFile(rel,obj,retried){
+  const root=await resolveAdminRoot();
+  const t=await getToken();
+  const r=await fetch(GRAPH+relUrl(root,rel)+'/content?@microsoft.graph.conflictBehavior=fail',
+    {method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify(obj)});
+  if(r.status===409) return {already:true};           // same file already arrived earlier: fine
+  if(r.status===404 && !retried){                   // a folder on the way is missing: create it, retry once
+    await ensureFolders(root,rel.split('/').slice(0,-1));
+    return putJsonFile(rel,obj,true);
+  }
+  if(!r.ok){ const b=await r.text(); throw new Error('HTTP '+r.status+' '+b.slice(0,160)); }
+  return r.json();
+}
+async function ensureFolders(root,parts){
+  let parent=root.id;
+  for(const name of parts){
+    let kid=null;
+    try{ kid=await g(`/drives/${root.driveId}/items/${parent}:/${encodeURIComponent(name)}?$select=id,folder`); }catch(e){ kid=null; }
+    if(!kid){ kid=await g(`/drives/${root.driveId}/items/${parent}/children`,{method:'POST',body:JSON.stringify({name,folder:{},'@microsoft.graph.conflictBehavior':'fail'})}); }
+    parent=kid.id;
+  }
+}
+async function getJsonFile(rel){
+  const root=await resolveAdminRoot();
+  const t=await getToken();
+  const r=await fetch(GRAPH+relUrl(root,rel)+'/content',{headers:{'Authorization':'Bearer '+t}});
+  if(r.status===404) return null;
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+async function listFolder(rel){ // -> [{name,createdDateTime}] ; missing folder -> []
+  const root=await resolveAdminRoot();
+  let url=relUrl(root,rel)+'/children?$select=name,createdDateTime&$top=999', out=[];
+  try{
+    while(url){ const r=await g(url); out=out.concat(r.value||[]); url=r['@odata.nextLink']?r['@odata.nextLink'].replace(GRAPH,''):null; }
+  }catch(e){ if(/itemNotFound|404/.test(e.message)) return []; throw e; }
+  return out;
+}
+
+// --- offline queue (IndexedDB, falls back to localStorage)
+const QDB='mib_queue';
+function qOpen(){ return new Promise((res,rej)=>{ const r=indexedDB.open(QDB,1); r.onupgradeneeded=()=>r.result.createObjectStore('q',{keyPath:'rel'}); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function qAll(){
+  try{ const db=await qOpen(); return await new Promise((res,rej)=>{ const t=db.transaction('q').objectStore('q').getAll(); t.onsuccess=()=>res(t.result||[]); t.onerror=()=>rej(t.error); }); }
+  catch(e){ try{ return JSON.parse(localStorage.getItem('mib_queue_ls')||'[]'); }catch(_){ return []; } }
+}
+async function qPut(item){
+  try{ const db=await qOpen(); await new Promise((res,rej)=>{ const t=db.transaction('q','readwrite'); t.objectStore('q').put(item); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+  catch(e){ const a=(await qAll()).filter(x=>x.rel!==item.rel); a.push(item); localStorage.setItem('mib_queue_ls',JSON.stringify(a)); }
+}
+async function qDel(rel){
+  try{ const db=await qOpen(); await new Promise((res,rej)=>{ const t=db.transaction('q','readwrite'); t.objectStore('q').delete(rel); t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+  catch(e){ localStorage.setItem('mib_queue_ls',JSON.stringify((await qAll()).filter(x=>x.rel!==rel))); }
+}
+async function qBadge(){
+  const n=(await qAll()).length, el=document.getElementById('qcount'); if(!el) return n;
+  el.style.display=n?'':'none'; el.textContent=n+' waiting to send'; return n;
+}
+let _flushing=false;
+async function flushQueue(){
+  if(_flushing || !account || !S.fileId) return; _flushing=true;
+  try{
+    const items=await qAll();
+    for(const it of items){
+      try{ await putJsonFile(it.rel,it.body); await qDel(it.rel); }
+      catch(e){ it.tries=(it.tries||0)+1; it.lastErr=String(e.message||e).slice(0,160); await qPut(it); if(!navigator.onLine) break; }
+    }
+  } finally { _flushing=false; await qBadge(); }
+}
+window.addEventListener('online',()=>flushQueue());
+setInterval(()=>flushQueue(),60000);
+async function enqueueEntry(kind,dateStr,nameParts,body){
+  const rel=`_data/${kind}/${dateStr.slice(0,7)}/${dateStr}__${nameParts.map(slug).join('__')}__${tsCompact(new Date())}__${slug(deviceName())}__${slug(currentUser&&currentUser.name)}__${rand4()}.json`;
+  await qPut({rel,body,kind,queued_at:new Date().toISOString(),tries:0});
+  return rel;
+}
+function needDevice(){
+  if(deviceName()) return true;
+  const v=prompt('This device needs a name before saving (it is written into every entry).\nFor example: phone-gu or tablet-massimo');
+  if(v&&v.trim()){ LSset('deviceName',slug(v.trim().toLowerCase())); return true; }
+  alert('Not saved: set the device name in Settings first.'); return false;
+}
+function deliveryEntry(m,produced,returned){
+  const now=new Date();
+  return {id:`${tsCompact(now)}_${deviceName()}_${rand4()}`, date:m.date, client:m.name, client_type:m.ctype||'',
+    type:m.type||'', product:m.product, sample:String(m.type||'').trim().toLowerCase()==='sample',
+    produced:(produced===''||produced==null)?0:Number(produced), returned:(returned===''||returned==null)?null:Number(returned),
+    entered_by:currentUser?currentUser.name:'', device:deviceName(), at:now.toISOString(), supersedes:null,
+    master_row:m.row||null, save_mode:saveMode(), app:APP_VERSION};
+}
+// who entered each line of the week (read from the file NAMES only - no downloads)
+async function loadWeekEntryInfo(weekStart){
+  const months=[...new Set([0,6].map(n=>ymd(addDays(weekStart,n)).slice(0,7)))];
+  const info={};
+  for(const mo of months){
+    for(const f of await listFolder(`_data/deliveries/${mo}`)){
+      const p=f.name.replace(/\.json$/,'').split('__'); if(p.length<6) continue;
+      const sample=p[3]==='sample'; const off=sample?1:0;
+      const key=[p[0],p[1],p[2],sample?'s':''].join('|');
+      const rec={device:p[4+off],user:p[5+off],created:f.createdDateTime};
+      if(!info[key]||info[key].created<rec.created) info[key]=rec;
+    }
+  }
+  return info;
+}
+const entryKey=(date,client,product,type)=>[date,slug(client),slug(product),String(type||'').trim().toLowerCase()==='sample'?'s':''].join('|');
+
+// --- shared users (A5): _config/users.json, PINs hashed
+async function sha256(s){ const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+async function loadSharedUsers(){
+  try{
+    const j=await Promise.race([getJsonFile('_config/users.json'),new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),6000))]);
+    if(j&&Array.isArray(j.users)&&j.users.length){ localStorage.setItem('mib_users_shared',JSON.stringify(j)); return j; }
+  }catch(e){}
+  try{ return JSON.parse(localStorage.getItem('mib_users_shared')||'null'); }catch(e){ return null; }
+}
+async function publishUsers(){
+  if(!can('manageUsers')) return;
+  const local=getUsers(); if(!local.length){ alert('No users on this device to publish.'); return; }
+  if(!confirm('Publish these '+local.length+' users (names, roles, PINs) to ALL devices?\nPINs are stored scrambled (hashed), not readable.')) return;
+  show('Publishing users…');
+  try{
+    const users=[];
+    for(const u of local){ const salt=rand4()+rand4(); users.push({name:u.name,role:u.role,salt,pin_hash:await sha256(salt+':'+u.pin)}); }
+    const root=await resolveAdminRoot(); await ensureFolders(root,['_config']); const t=await getToken();
+    const r=await fetch(GRAPH+relUrl(root,'_config/users.json')+'/content',{method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},
+      body:JSON.stringify({users,updated_at:new Date().toISOString(),updated_by:currentUser.name,device:deviceName()})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    localStorage.removeItem('mib_users_shared'); hide(); alert('Published. Other devices pick it up at their next PIN screen.');
+  }catch(e){ hide(); alert('Publishing failed: '+(e.message||e)); }
+}
+
 /* ---------- SYNC & BOOT ---------- */
 async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:{},monthBlocks:{},pdfLatest:null,recInv:null}; await render(); }
 (async function boot(){
@@ -1337,7 +1554,7 @@ async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:
   // 2026-07-06 cdnjs outage). Wait briefly for the fallback CDN, then show a real error.
   for(let i=0;i<20 && typeof msal==='undefined';i++) await new Promise(r=>setTimeout(r,250));
   if(typeof msal==='undefined'){
-    M.innerHTML='<div class="err">Could not load the Microsoft sign-in library from either CDN (jsDelivr or unpkg). This is a network/CDN problem, not an app problem — check the internet connection and reload the page.</div>';
+    M.innerHTML='<div class="err">Could not load the Microsoft sign-in library (app copy, jsDelivr and unpkg all failed). This is a network/CDN problem, not an app problem — check the internet connection and reload the page.</div>';
     return;
   }
   if(!initMsal()){ go('set'); return; }
@@ -1347,6 +1564,7 @@ async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:
     if(account){ msalApp.setActiveAccount(account); document.getElementById('subtitle').textContent=account.username; document.getElementById('syncBtn').style.display=''; }
   }catch(e){ M.innerHTML=`<div class="err">Sign-in error: ${esc(e.message)}</div>`; }
   go((!S.fileId||!account)?'set':'home');
+  qBadge(); setTimeout(()=>flushQueue(),3000);
 })();
 </script>
 </body>
