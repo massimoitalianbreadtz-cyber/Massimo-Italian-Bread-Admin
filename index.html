@@ -165,7 +165,10 @@ function initMsal(){
   if(!S.clientId) return false;
   msalApp = new msal.PublicClientApplication({
     auth:{clientId:S.clientId, authority:'https://login.microsoftonline.com/common', redirectUri: location.origin+location.pathname},
-    cache:{cacheLocation:'localStorage'}
+    // 27 Sep 2026 fix: on Android the sign-in comes back into the INSTALLED app (a different window from the
+    // Chrome tab that started it). The temporary sign-in state was in the tab's sessionStorage and was lost,
+    // giving a blank screen. Keep it in localStorage (shared by Chrome and the installed app) + a cookie backup.
+    cache:{cacheLocation:'localStorage', temporaryCacheLocation:'localStorage', storeAuthStateInCookie:true}
   });
   return true;
 }
@@ -1413,7 +1416,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-09-27-planB-3';
+const APP_VERSION='2026-09-27-planB-4';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
