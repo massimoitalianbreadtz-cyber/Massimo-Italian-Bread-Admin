@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta name="theme-color" content="#A71B1B">
 <title>Massimo Admin</title>
-<link rel="manifest" id="manifest">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<meta name="apple-mobile-web-app-title" content="Massimo">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <!-- Plan B A11 (2026-09-25): the sign-in library now ships INSIDE the repo (msal-browser.min.js,
      @azure/msal-browser 2.38.3, sha256 595c0a2d...), so a CDN outage like 2026-07-06 can no longer
      break sign-in. jsDelivr then unpkg remain as fallbacks if the local copy is ever missing. -->
@@ -1409,7 +1413,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-09-27-planB-2';
+const APP_VERSION='2026-09-27-planB-3';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
@@ -1827,12 +1831,7 @@ async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:
   // PWA manifest for "install to home screen" (item 3b: Android uses manifest icons; iOS Safari
   // ignores the manifest for the home-screen icon and needs its own apple-touch-icon link tag).
   document.getElementById('logoimg').src=LOGO;
-  const man={name:'Massimo Italian Bread — Admin',short_name:'Massimo',start_url:location.href,display:'standalone',background_color:'#FFFDFD',theme_color:'#A71B1B',
-    icons:[{src:LOGO,sizes:'280x212',type:'image/png',purpose:'any'}]};
-  document.getElementById('manifest').href='data:application/manifest+json,'+encodeURIComponent(JSON.stringify(man));
-  const appleIcon=document.createElement('link'); appleIcon.rel='apple-touch-icon'; appleIcon.href=LOGO; document.head.appendChild(appleIcon);
-  const appleTitle=document.createElement('meta'); appleTitle.name='apple-mobile-web-app-title'; appleTitle.content='Massimo'; document.head.appendChild(appleTitle);
-  const appleCap=document.createElement('meta'); appleCap.name='apple-mobile-web-app-capable'; appleCap.content='yes'; document.head.appendChild(appleCap);
+  // 27 Sep 2026: home-screen icon + name now come from manifest.webmanifest and the square icon files (Massimo logo).
   document.getElementById('nav').style.display='flex';
   try{ currentUser = JSON.parse(sessionStorage.getItem('mib_curuser')||'null'); }catch(e){ currentUser=null; }
   // Fix (2026-07-07): if the msal script failed to load, initMsal() threw "msal is not defined"
