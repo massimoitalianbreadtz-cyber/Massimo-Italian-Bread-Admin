@@ -9,7 +9,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="apple-mobile-web-app-title" content="Massimo">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<!-- 27 Sep: no apple-mobile-web-app-capable: the home-screen icon opens in Safari, so sign-in and storage stay in one place -->
 <!-- Plan B A11 (2026-09-25): the sign-in library now ships INSIDE the repo (msal-browser.min.js,
      @azure/msal-browser 2.38.3, sha256 595c0a2d...), so a CDN outage like 2026-07-06 can no longer
      break sign-in. jsDelivr then unpkg remain as fallbacks if the local copy is ever missing. -->
@@ -1416,7 +1416,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-09-27-planB-4';
+const APP_VERSION='2026-09-27-planB-5';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
