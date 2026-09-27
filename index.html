@@ -92,6 +92,8 @@ h3.wk{font-size:13px;margin:12px 0 4px;color:var(--brown)}
 <nav id="nav" style="display:none">
 <button data-p="home" onclick="go('home')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></span>Overview</button>
 <button data-p="deliv" onclick="go('deliv')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M1 7h14v10H1z"/><path d="M15 10h4l3 3v4h-7"/><circle cx="5.5" cy="17.5" r="1.8"/><circle cx="18.5" cy="17.5" r="1.8"/></svg></span>Deliveries</button>
+<button data-p="sum" onclick="go('sum')"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M15 9v11"/></svg></span>Weekly</button>
+<button data-p="ana" onclick="go('ana')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>Analysis</button>
 <button data-p="invoices" onclick="go('invoices')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span>Invoices</button>
 <button data-p="income" onclick="go('income')"><span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.5 1.3-2.2 3-2.2s3 .9 3 2.1c0 2.8-6 1.3-6 4.1 0 1.3 1.3 2.2 3 2.2s3-.7 3-2.2"/></svg></span>Income</button>
 <button data-p="exp" onclick="go('exp')"><span class="ic"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h11"/></svg></span>Expenses</button>
@@ -106,7 +108,10 @@ const LOGO='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAARgAAADUCAYAAABH0zz3AA
 const LS = k => localStorage.getItem('mib_'+k);
 const LSset = (k,v) => localStorage.setItem('mib_'+k, v);
 let msalApp=null, account=null, token=null;
-let S = { fileId: LS('fileId'), fileDriveId: LS('fileDriveId')||null, tfolderId: LS('tfolderId'), tfolderDriveId: LS('tfolderDriveId')||null, clientId: LS('clientId'), pdfFolders: JSON.parse(LS('pdfFolders')||'{}') };
+// 27 Sep 2026: the Azure Client ID is not a password - built in, so a device that loses its settings
+// only needs "Sign in" + PIN. A Client ID saved in Settings on a device still takes priority.
+const BUILTIN_CLIENT_ID='__CLIENT_ID__';
+let S = { fileId: LS('fileId'), fileDriveId: LS('fileDriveId')||null, tfolderId: LS('tfolderId'), tfolderDriveId: LS('tfolderDriveId')||null, clientId: LS('clientId') || (BUILTIN_CLIENT_ID.startsWith('__')?null:BUILTIN_CLIENT_ID), pdfFolders: JSON.parse(LS('pdfFolders')||'{}') };
 
 /* ================= USERS & ROLES (item 1) =================
    This is a lightweight, DEVICE-LOCAL name+PIN layer for accountability, NOT a Microsoft-level
@@ -371,6 +376,9 @@ async function render(){
     if(ROLES[currentUser.role]?.restrictToExpenses && page!=='exp'){ page='exp'; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.p==='exp')); }
     if(page==='home') return await renderHome();
     if(page==='deliv') return await renderDeliv();
+    if(page==='sum') return await renderSummary();
+    if(page==='ana') return await renderAnalysis();
+    if(page==='rules') return await renderRules();
     if(page==='invoices') return await renderInvoices();
     if(page==='income') return await renderIncome();
     if(page==='exp') return await renderExpenses();
@@ -451,6 +459,7 @@ function createFirstAdmin(){
 }
 
 /* ---------- HOME (item 2: summarised per client, no per-cell invoice-fill scan -> faster) ---------- */
+let hWeekOff=null; // 0 = this week, -1 = last week... (Monday opens on last week = closing)
 async function renderHome(){
   show('Building overview…');
   const idx=await loadDateIndex();
@@ -465,8 +474,10 @@ async function renderHome(){
   const mDays = Math.max(0, Math.round((mEnd-mStart)/86400000)+1);
   const pStart=new Date(today.getFullYear(),today.getMonth()-1,1), pEndFull=new Date(today.getFullYear(),today.getMonth(),0);
   const pEnd = mDays<=0 ? addDays(pStart,-1) : addDays(pStart, Math.min(mDays, Math.round((pEndFull-pStart)/86400000)+1)-1);
-  const wStart=monday(today), wEndFull=addDays(wStart,6);
-  const wEnd = yesterday<wStart ? addDays(wStart,-1) : (yesterday<wEndFull?yesterday:wEndFull);
+  if(hWeekOff===null) hWeekOff = today.getDay()===1 ? -1 : 0;
+  const wStart=addDays(monday(today),7*hWeekOff), wEndFull=addDays(wStart,6);
+  const wEnd = hWeekOff<0 ? wEndFull : (yesterday<wStart ? addDays(wStart,-1) : (yesterday<wEndFull?yesterday:wEndFull));
+  const wTitle = hWeekOff===0?'This week':hWeekOff===-1?'Last week':'Week';
   const wDays = Math.max(0, Math.round((wEnd-wStart)/86400000)+1);
   const pwStart=addDays(wStart,-7);
   const pwEnd = wDays<=0 ? addDays(pwStart,-1) : addDays(pwStart, wDays-1);
@@ -507,21 +518,21 @@ async function renderHome(){
   </div></div>
   <div class="card"><h2>Month — sales per client</h2>${pcTable(mA,pA)}</div>
   <div class="card"><h2>Month — expenditure by category</h2>${expTable(mE,pE)}</div>
-  <div class="card"><h2>This week (${ymd(wStart)} → ${ymd(wEndFull)})</h2><p class="muted" style="margin:-4px 0 8px">Through ${wDays>0?ymd(wEnd):'— no days elapsed yet'}</p><div class="kpis">
+  <div class="card"><div class="row" style="align-items:center"><button class="btn sm sec" onclick="hWeekOff--;renderHome()">◀</button><h2 class="spacer" style="border:none;margin:0;text-align:center">${wTitle} (${ymd(wStart)} → ${ymd(wEndFull)})</h2><button class="btn sm sec" ${hWeekOff>=0?'disabled':''} onclick="hWeekOff++;renderHome()">▶</button></div><p class="muted" style="margin:4px 0 8px">Through ${wDays>0?ymd(wEnd):'— no days elapsed yet'}${hWeekOff<0?' · full week':''}</p><div class="kpis">
     ${kpi('Projected deliveries',fmt(wA?.plan),trendHtml(wA?.plan,pwA?.plan))}
     ${kpi('Returns',`${fmt(wA?.ret)} <span style="font-size:12px">(${wA?pct(wA.ret,wA.plan).toFixed(0):0}%)</span>`,trendHtml(wA?pct(wA.ret,wA.plan):null,pwA?pct(pwA.ret,pwA.plan):null,true))}
     ${kpi('Sold units',fmt(wA?.sold),trendHtml(wA?.sold,pwA?.sold))}
     ${kpi('Sales',fmtT(wA?.sales),trendHtml(wA?.sales,pwA?.sales))}
     ${kpi('Expenditure',fmtT(wE.total),trendHtml(wE.total,pwE.total,true))}
   </div></div>
-  <div class="card"><h2>This week — sales per client</h2>${pcTable(wA,pwA)}</div>
-  <div class="card"><h2>This week — expenditure by category</h2>${expTable(wE,pwE)}</div>
+  <div class="card"><h2>${wTitle} — sales per client</h2>${pcTable(wA,pwA)}</div>
+  <div class="card"><h2>${wTitle} — expenditure by category</h2>${expTable(wE,pwE)}</div>
   <p class="muted" style="text-align:center">Pending payments now live on the <b>Income</b> tab.</p>`;
 }
 
 /* ---------- DELIVERIES & RETURNS (item 4: lock Samples & Individual Client/Restaurant returns;
    item 5: review box shows exactly what will be saved) ---------- */
-let dWeek=null, dRows=null, dDirty={}, dMeta={}, dLoadedAt=null;
+let dWeek=null, dRows=null, dDirty={}, dMeta={}, dLoadedAt=null, dOpenDay=null;
 function rowLock(x){
   const type=String(x.type||'').trim().toLowerCase();
   const ctype=String(x.ctype||'').trim().toLowerCase();
@@ -531,7 +542,7 @@ function rowLock(x){
 }
 async function renderDeliv(){
   const idx=await loadDateIndex();
-  if(!dWeek) dWeek=monday(new Date());
+  if(!dWeek){ const t=new Date(); dWeek = t.getDay()===1 ? addDays(monday(t),-7) : monday(t); } // Monday = closing: open last week
   const wEnd=addDays(dWeek,6);
   show('Loading week…');
   const rr=rowsForRange(idx,dWeek,wEnd);
@@ -541,6 +552,7 @@ async function renderDeliv(){
   let eInfo={}; dLoadedAt=new Date().toISOString();
   if(saveMode()!=='master'){ try{ show('Checking entries from other devices…'); eInfo=await loadWeekEntryInfo(dWeek); }catch(e){ eInfo={}; } }
   const queued=new Set((await qAll()).filter(q=>q.kind==='deliveries').map(q=>entryKey(q.body.date,q.body.client,q.body.product,q.body.type)));
+  if(saveMode()!=='master'){ try{ await loadWeekPhotos(dWeek); }catch(e){ dPhotos={}; } }
   hide();
   const days={};
   dRows.forEach(x=>{ if(!x.date) return; const k=ymd(x.date); (days[k]=days[k]||[]).push(x); });
@@ -562,7 +574,8 @@ async function renderDeliv(){
     <div class="day-head" onclick="const b=document.getElementById('day${di}');b.style.display=b.style.display==='none'?'':'none'">
       <span>${esc(dayName)} ${k.slice(8,10)}/${k.slice(5,7)}</span>
       <span class="muted">Deliv ${fmt(tot.p)} · Ret ${fmt(tot.r)} · Sold ${fmt(tot.sl)} · ${fmt(tot.tt)} TZS</span></div>
-    <div id="day${di}" style="display:${di===((new Date().getDay()+6)%7)?'':'none'};overflow-x:auto">
+    <div id="day${di}" style="display:${(dOpenDay?k===dOpenDay:di===((new Date().getDay()+6)%7))?'':'none'};overflow-x:auto">
+    ${saveMode()!=='master'?(()=>{ const cl=[...new Set(rows.map(x=>cName(x.name)).filter(Boolean))]; return `<div id="pb_${k}" data-clients='${JSON.stringify(cl).replace(/'/g,"&#39;")}'>${photoBox(k,cl)}</div>`; })():''}
     <table><tr><th>Client</th><th>Product</th><th class="num">Deliv (G)</th><th class="num">Ret (H)</th><th class="num">Sold</th><th class="num">Price</th><th class="num">Total</th></tr>
     ${rows.map(x=>{
       const lock=rowLock(x);
@@ -589,6 +602,7 @@ async function renderDeliv(){
     }).join('')}
     </table></div></div>`;
   }).join('') : '<div class="card"><p class="muted">No rows found in the 2026 sheet for this week.</p></div>'}`;
+  if(dOpenDay){ const el=document.getElementById('day'+Object.keys(days).indexOf(dOpenDay)); if(el) el.scrollIntoView({block:'start'}); dOpenDay=null; }
 }
 // Fix (Gu, 2026-07-06): the old itemized "about to save" table was cumbersome and hard to read —
 // removed. A plain one-line count next to Save is enough to know something is pending.
@@ -769,7 +783,7 @@ async function renderIncome(){
   }));
   const pendTot=pending.reduce((s,x)=>s+x.amount,0);
   M.innerHTML=`<div class="card"><h2>Income</h2>
-  <p class="muted">Read-only — this mirrors the [Invoices & Income] sheet exactly, including its green (paid) / orange (pending) highlight. To mark something paid, do it in Excel; the app will show it on next Sync. Showing the last ${recent.length} fully completed week(s) (weeks still in progress or not yet reached are left out).</p>
+  <p class="muted">Mirrors the [Invoices &amp; Income] sheet, including its green (paid) / orange (pending) highlight. ${isAdmin()?'Tap <b>Paid</b> / <b>Pending</b> on a line to mark it; the app colours the cell in the Master and keeps a record.':'Only an Admin can mark payments.'} Showing the last ${recent.length} fully completed week(s) (weeks still in progress or not yet reached are left out).</p>
   ${dupeFound?'<p class="err">Note: the [Invoices & Income] sheet has the same week label appearing more than once with different totals — showing the later entry. Worth checking in Excel which one is correct.</p>':''}</div>
   <div class="card"><h2>Pending payments (orange) — last ${recent.length} week(s)</h2>
     ${pending.length?`<table><tr><th>Week</th><th>Client</th><th class="num">TZS</th></tr>
@@ -785,7 +799,8 @@ async function renderIncome(){
     const invNo=invMap[sc.sheet+'|'+ymd(w._start)+'|'+sc.code]||'';
     return `<tr><td>${esc(col.name)}</td><td class="muted">${esc(invNo)}</td>
     <td class="num">${fmt(col.amount)}</td>
-    <td><span class="pill ${st}">${st==='paid'?'Paid':st==='pend'?'Pending':'—'}</span></td></tr>`;
+    <td><span class="pill ${st}">${st==='paid'?'Paid':st==='pend'?'Pending':'—'}</span>
+    ${isAdmin()?`<br><button class="btn sm ${st==='paid'?'sec':''}" style="margin-top:3px" onclick="markPaid('${esc(w.label).replace(/'/g,"\\'")}','${ymd(w._start)}',${w.totRow},${col.c},'${esc(col.name).replace(/'/g,"\\'")}',${col.amount},'${esc(invNo)}',${st!=='paid'})">${st==='paid'?'Mark pending':'Mark paid'}</button>`:''}</td></tr>`;
   }).join('')}</table></div></div>`).join('')}`;
 }
 
@@ -1334,6 +1349,15 @@ async function reresolveFolderId(){
     return true;
   }catch(e){ return false; }
 }
+// 27 Sep 2026: find the live master by itself - exact name, in "...Salty Water Administration/Receipts" only
+async function autoLinkMaster(){
+  const r=await g(`/me/drive/root/search(q='Salty_Water_2026_Master')?$select=id,name,parentReference&$top=25`);
+  const hits=(r.value||[]).filter(x=>x.name==='Salty_Water_2026_Master.xlsx' && /Salty Water Administration\/Receipts$/.test(decodeURIComponent((x.parentReference&&x.parentReference.path)||'')));
+  if(hits.length!==1) return false;
+  S.fileId=hits[0].id; S.fileDriveId=hits[0].parentReference.driveId||null; LSset('fileId',S.fileId); LSset('fileDriveId',S.fileDriveId||'');
+  if(!S.tfolderId){ try{ await reresolveFolderId(); }catch(e){} }
+  return true;
+}
 async function findFile(){
   const o=document.getElementById('setout'); o.innerHTML='Searching…';
   const r=await g(`/me/drive/root/search(q='Salty_Water_2026_Master')?$select=id,name,parentReference,webUrl&$top=10`);
@@ -1385,7 +1409,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-09-25-planB-1';
+const APP_VERSION='2026-09-27-planB-2';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
@@ -1467,10 +1491,15 @@ async function flushQueue(){
   try{
     const items=await qAll();
     for(const it of items){
-      try{ await putJsonFile(it.rel,it.body); await qDel(it.rel); }
-      catch(e){ it.tries=(it.tries||0)+1; it.lastErr=String(e.message||e).slice(0,160); await qPut(it); if(!navigator.onLine) break; }
+      try{ if(it.blob) await putBinaryFile(it.rel,it.blob); else await putJsonFile(it.rel,it.body); await qDel(it.rel); await sleep(150); }
+      catch(e){ it.tries=(it.tries||0)+1; it.lastErr=String(e.message||e).slice(0,160); await qPut(it); if(!navigator.onLine) break; await sleep(1000); }
     }
-  } finally { _flushing=false; await qBadge(); }
+  } finally {
+    _flushing=false; const n=await qBadge();
+    // 27 Sep fix: the message next to Save used to stay on "waiting to send" after a background retry succeeded
+    const m=document.getElementById('saveMsg');
+    if(m && /waiting to send|sending/.test(m.textContent)) m.textContent=m.textContent.replace(/ · .*$/,'')+(n?` · ${n} waiting to send`:' · entries sent');
+  }
 }
 window.addEventListener('online',()=>flushQueue());
 setInterval(()=>flushQueue(),60000);
@@ -1535,6 +1564,263 @@ async function publishUsers(){
   }catch(e){ hide(); alert('Publishing failed: '+(e.message||e)); }
 }
 
+/* ================= 27 SEP 2026 BUILD: ANALYSIS + RULES + WEEKLY SUMMARY + PHOTOS + PAID ================= */
+const DAYS7=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const PCAT={'White Bread loaf':'Large','Brown Bread loaf':'Large','White Baguette':'Baguette','White Bread half loaf':'Small','Brown Bread half loaf':'Small','Small':'Small','Focaccia olives':'Focaccia','Focaccia onion':'Focaccia','Focaccia tomatoes':'Focaccia','Focaccia':'Focaccia'};
+const CATS4=['Large','Baguette','Small','Focaccia'];
+const CLIENT_ALIAS={"G'eez":'Geez',"G'eez Restaurant":'Geez','Geez Restaurant':'Geez'};
+const MONTHLY_CLIENTS=new Set(['Lido','Geez']);
+const isAdmin=()=>!!(currentUser && ROLES[currentUser.role] && ROLES[currentUser.role].canManageUsers);
+const cName=n=>{ const x=String(n||'').trim().replace(/\s+/g,' '); return CLIENT_ALIAS[x]||x; };
+
+// overwrite a JSON file (rules, users) - one writer: an Admin
+async function putJsonOverwrite(rel,obj){
+  const root=await resolveAdminRoot(); await ensureFolders(root,rel.split('/').slice(0,-1)); const t=await getToken();
+  const r=await fetch(GRAPH+relUrl(root,rel)+'/content',{method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify(obj,null,1)});
+  if(!r.ok){ const b=await r.text(); throw new Error('HTTP '+r.status+' '+b.slice(0,160)); }
+  return r.json();
+}
+async function putBinaryFile(rel,blob,retried){
+  const root=await resolveAdminRoot(); const t=await getToken();
+  const r=await fetch(GRAPH+relUrl(root,rel)+'/content?@microsoft.graph.conflictBehavior=rename',{method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':blob.type||'image/jpeg'},body:blob});
+  if(r.status===404 && !retried){ await ensureFolders(root,rel.split('/').slice(0,-1)); return putBinaryFile(rel,blob,true); }
+  if(!r.ok){ const b=await r.text(); throw new Error('HTTP '+r.status+' '+b.slice(0,160)); }
+  return r.json();
+}
+async function fetchBlobUrl(rel){
+  const root=await resolveAdminRoot(); const t=await getToken();
+  const r=await fetch(GRAPH+relUrl(root,rel)+'/content',{headers:{'Authorization':'Bearer '+t}});
+  if(!r.ok) throw new Error('HTTP '+r.status); return URL.createObjectURL(await r.blob());
+}
+
+/* ---------- ANALYSIS (review proposals -> approve / edit / reject -> apply to next week's Deliveries) ---------- */
+let ana=null; // {rev, final:{key:value}, status:{rowKey:'ok'|'no'}, applied}
+const anaKey=l=>l.retailer+'|'+l.product+'|'+l.date;
+const anaRowKey=l=>l.retailer+'|'+l.product;
+async function renderAnalysis(){
+  show('Loading the latest review…');
+  let rev=null; try{ rev=await getJsonFile('_plan/latest.json'); }catch(e){ rev=null; }
+  let applied=[];
+  if(rev){ try{ applied=(await listFolder(`_data/approvals/${rev.next_week.start.slice(0,7)}`)).filter(f=>f.name.startsWith(rev.next_week.start+'__')).sort((a,b)=>a.createdDateTime<b.createdDateTime?1:-1); }catch(e){} }
+  hide();
+  const rulesBtn=`<button class="btn sm sec" onclick="go('rules')">📋 Rules</button>`;
+  if(!rev){ M.innerHTML=`<div class="card"><h2>Analysis</h2><p class="muted">No review yet. The laptop writes one every Friday evening. You can still change any number for next week directly in <b>Deliveries</b>.</p><div class="row">${rulesBtn}<button class="btn sm" onclick="dWeek=addDays(monday(new Date()),7);go('deliv')">Open next week in Deliveries</button></div></div>`; return; }
+  if(!ana || ana.rev.generated_at!==rev.generated_at){
+    ana={rev,final:{},status:{}};
+    rev.lines.forEach(l=>{ ana.final[anaKey(l)]=l.to; });
+  }
+  ana.applied=applied;
+  const admin=isAdmin();
+  const byR={}; rev.lines.forEach(l=>{ (byR[l.retailer]=byR[l.retailer]||[]).push(l); });
+  const nowTot=rev.lines.reduce((s,l)=>s+l.from,0), newTot=rev.lines.reduce((s,l)=>s+(Number(ana.final[anaKey(l)])||0),0);
+  const changedRows=new Set(rev.lines.filter(l=>l.to!==l.from).map(anaRowKey));
+  const undecided=[...changedRows].filter(k=>!ana.status[k]).length;
+  const netRow={}; rev.lines.forEach(l=>{ const k=anaRowKey(l); netRow[k]=(netRow[k]||0)+(l.to-l.from); });
+  const incUp=Object.values(netRow).filter(v=>v>0).reduce((s,v)=>s+v,0); // same as the report: net per product
+  const fmtD=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+  const score=rev.scoreboard.map(x=>{ const icon=x.action==='up'?'🟢':x.action==='down'?'🔴':String(x.action).startsWith('hold')?'⏸':x.action==='watch'?'🟠':'⚪';
+    return `<tr><td>${esc(x.retailer.replace('Shoppers ',''))}</td><td class="num">${x.delivered??''}</td><td class="num">${x.sold??''}</td><td class="num">${Math.round(x.returns_pct)}%</td><td class="num">${Math.round(x.target)}%</td><td>${icon} ${esc(x.verdict||x.action)}</td></tr>`; }).join('');
+  const branchCards=Object.entries(byR).map(([r,ls])=>{
+    const prods=[...new Set(ls.map(l=>l.product))];
+    const days=DAYS7.filter(d=>ls.some(l=>l.day===d));
+    const from=ls.reduce((s,l)=>s+l.from,0), to=ls.reduce((s,l)=>s+(Number(ana.final[anaKey(l)])||0),0);
+    const rows=prods.map(p=>{
+      const pl=ls.filter(l=>l.product===p); const rk=r+'|'+p; const ch=changedRows.has(rk); const st=ana.status[rk];
+      const why=[...new Set(pl.map(l=>l.reason).filter(Boolean))].join(' / ');
+      return `<tr style="${st==='no'?'opacity:.55':''}"><td>${esc(p)}${why?`<br><small class="muted">${esc(why)}</small>`:''}</td>${days.map(d=>{ const l=pl.find(x=>x.day===d); if(!l) return '<td></td>';
+        const v=ana.final[anaKey(l)], up=l.to>l.from, dn=l.to<l.from;
+        return `<td class="num">${l.to!==l.from?`<small class="muted">${l.from}→</small>`:''}<input class="cell" style="width:44px;${up?'background:#e6f4e6;font-weight:700':dn?'background:#fff3e0':''}" type="number" min="0" value="${v}" ${admin&&!ana.applied.length?`onchange="anaEdit('${esc(anaKey(l)).replace(/'/g,"\\'")}',this.value,'${esc(rk).replace(/'/g,"\\'")}')"`:'readonly'}></td>`; }).join('')}
+      <td style="white-space:nowrap">${ch&&admin&&!ana.applied.length?`<button class="btn sm ${st==='ok'?'':'sec'}" onclick="anaSet('${esc(rk).replace(/'/g,"\\'")}','ok')">✅</button> <button class="btn sm ${st==='no'?'':'sec'}" onclick="anaSet('${esc(rk).replace(/'/g,"\\'")}','no')">✖</button>`:(ch?(st==='ok'?'✅':st==='no'?'✖':''):'')}</td></tr>`; }).join('');
+    return `<div class="card"><div class="day-head" onclick="const b=document.getElementById('an_${slug(r)}');b.style.display=b.style.display==='none'?'':'none'"><span>${esc(r)}: ${from} → <b>${to}</b></span><span class="muted">${to-from>0?'+':''}${to-from}</span></div>
+      <div id="an_${slug(r)}" style="display:none;overflow-x:auto"><table><tr><th>Product</th>${days.map(d=>`<th class="num">${d.slice(0,3)}</th>`).join('')}<th></th></tr>${rows}</table>
+      ${admin&&!ana.applied.length?`<div class="row" style="margin-top:6px"><button class="btn sm" onclick="anaAll('${esc(r).replace(/'/g,"\\'")}','ok')">Approve all for ${esc(r.replace('Shoppers ',''))}</button><button class="btn sm sec" onclick="anaAll('${esc(r).replace(/'/g,"\\'")}','no')">Reject all</button></div>`:''}</div></div>`;
+  }).join('');
+  const appliedInfo=ana.applied.length?(()=>{ const p=ana.applied[0].name.split('__'); return `<p class="pill paid" style="display:inline-block;margin-top:6px">Applied by ${esc(p[4]||'')} on ${esc(p[3]||'')} · ${new Date(ana.applied[0].createdDateTime).toLocaleString('en-GB')}</p>`; })():'';
+  M.innerHTML=`<div class="card"><h2>Analysis</h2>
+    <p><b>Reviewed:</b> ${fmtD(rev.window.start)} – ${fmtD(rev.window.end)} (compared with ${fmtD(rev.compared.start)} – ${fmtD(rev.compared.end)})<br>
+    <b>Next week:</b> ${fmtD(rev.next_week.start)} – ${fmtD(rev.next_week.end)} · <b>${nowTot} → ${newTot}</b> (${newTot-nowTot>=0?'+':''}${newTot-nowTot}) · increases proposed +${incUp}</p>
+    <p class="muted">"From" numbers are what was actually delivered in the reviewed week. Nothing changes in Deliveries until an Admin presses Apply. Rejected lines keep the "from" number. Any number can still be changed by hand in Deliveries afterwards.</p>
+    ${appliedInfo}<div class="row" style="margin-top:6px">${rulesBtn}</div></div>
+  <div class="card"><h2>How each branch did</h2><div style="overflow-x:auto"><table><tr><th>Branch</th><th class="num">Deliv.</th><th class="num">Sold</th><th class="num">Returns</th><th class="num">Target</th><th></th></tr>${score}</table></div>
+  ${rev.capped&&rev.capped.length?`<p class="muted" style="margin-top:6px">Step cap applied: ${esc(rev.capped.join('; '))}</p>`:''}</div>
+  ${branchCards}
+  ${admin&&!ana.applied.length?`<div class="card"><p>${undecided?`<b>${undecided}</b> changed line(s) still need ✅ or ✖.`:'All changed lines decided.'}</p><button class="btn" ${undecided?'disabled':''} onclick="anaApply()">Apply to next week's Deliveries</button></div>`:''}
+  ${!admin?'<p class="muted">Only an Admin can approve and apply.</p>':''}`;
+}
+function anaSet(rk,v){ ana.status[rk]=v; const [r,p]=rk.split('|'); if(v==='no') ana.rev.lines.filter(l=>l.retailer===r&&l.product===p).forEach(l=>ana.final[anaKey(l)]=l.from); else ana.rev.lines.filter(l=>l.retailer===r&&l.product===p&&ana.final[anaKey(l)]===l.from&&l.to!==l.from).forEach(l=>ana.final[anaKey(l)]=l.to); const open=document.getElementById('an_'+slug(r))?.style.display; renderAnalysis().then(()=>{ if(open==='') { const b=document.getElementById('an_'+slug(r)); if(b) b.style.display=''; } }); }
+function anaAll(r,v){ ana.rev.lines.filter(l=>l.retailer===r&&l.to!==l.from).forEach(l=>{ ana.status[r+'|'+l.product]=v; ana.final[anaKey(l)]= v==='no'?l.from:l.to; }); renderAnalysis().then(()=>{ const b=document.getElementById('an_'+slug(r)); if(b) b.style.display=''; }); }
+function anaEdit(k,val,rk){ ana.final[k]=Math.max(0,Math.round(Number(val)||0)); ana.status[rk]='ok'; }
+async function anaApply(){
+  if(!isAdmin()) return;
+  const rev=ana.rev, mode=saveMode();
+  if(mode!=='master' && !needDevice()) return;
+  const lines=rev.lines.map(l=>({...l,final:Number(ana.final[anaKey(l)])||0,status:ana.status[anaRowKey(l)]||(l.to===l.from?'unchanged':'ok')}));
+  const up=lines.reduce((s,l)=>s+Math.max(0,l.final-l.from),0), dn=lines.reduce((s,l)=>s+Math.min(0,l.final-l.from),0);
+  const tot=lines.reduce((s,l)=>s+l.final,0);
+  if(!confirm(`Apply next week's numbers (${rev.next_week.start} to ${rev.next_week.end})?\n\nTotal ${tot} units (increases +${up}, reductions ${dn}).\nApproved by ${currentUser.name}.`)) return;
+  let written=0, missing=[];
+  if(mode!=='entries'){
+    show('Reading next week in the Master…');
+    const idx=await loadDateIndex(true); const a=new Date(rev.next_week.start+'T00:00:00'), b=new Date(rev.next_week.end+'T00:00:00');
+    const rr=rowsForRange(idx,a,b); if(!rr){ hide(); alert('Next week has no rows in the Master yet. Nothing was applied.'); return; }
+    const rows=await loadBlock(rr.r1,rr.r2);
+    const reqs=[];
+    lines.forEach(l=>{
+      const hit=rows.filter(x=>x.date&&ymd(x.date)===l.date&&cName(x.name)===cName(l.retailer)&&String(x.product||'').trim()===l.product&&String(x.type||'').trim().toLowerCase()!=='sample');
+      if(hit.length!==1){ missing.push(`${l.date} ${l.retailer} ${l.product} (${hit.length} rows)`); return; }
+      l.master_row=hit[0].row; l.master_before=Number(hit[0].plan)||0;
+      if(l.master_before!==l.final) reqs.push({id:'a'+reqs.length,method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='G${hit[0].row}')`,body:{values:[[l.final]]}});
+    });
+    show(`Writing ${reqs.length} number(s) to next week…`);
+    let res; try{ res=await gbatch(reqs); }catch(e){ hide(); alert('Apply failed: '+(e.message||e)+'\nNothing may have been written - try again.'); return; }
+    const fails=Object.values(res).filter(r=>r.status>=400);
+    written=reqs.length-fails.length;
+    if(fails.length){ hide(); alert(fails.length+' number(s) failed to write (is the Master open in Excel?). Close it and press Apply again - it only rewrites what is still different.'); return; }
+  }
+  const now=new Date();
+  const body={id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,review:rev.generated_at,window:rev.window,next_week:rev.next_week,rules_version:rev.rules_version,
+    approved_by:currentUser.name,device:deviceName(),at:now.toISOString(),save_mode:mode,written,missing,
+    lines:lines.map(l=>({retailer:l.retailer,product:l.product,date:l.date,from:l.from,proposed:l.to,final:l.final,status:l.status,master_before:l.master_before??null,master_row:l.master_row??null}))};
+  const rel=`_data/approvals/${rev.next_week.start.slice(0,7)}/${rev.next_week.start}__applied__${tsCompact(now)}__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`;
+  await qPut({rel,body,kind:'approvals',queued_at:now.toISOString(),tries:0}); await flushQueue();
+  hide();
+  alert(`Applied. ${written} number(s) changed in next week's Deliveries.`+(missing.length?`\n\nNot found in the Master (check by hand):\n${missing.slice(0,12).join('\n')}`:''));
+  cache.dateIndex=null; renderAnalysis();
+}
+
+/* ---------- RULES (view + edit + approve; the Friday review reads the approved file) ---------- */
+let rulesDraft=null, rulesOrig=null;
+async function renderRules(){
+  show('Loading rules…');
+  let r=null; try{ r=await getJsonFile('_config/review_rules.json'); }catch(e){}
+  hide();
+  if(!r){ M.innerHTML='<div class="card"><h2>Rules</h2><p class="err">The rules file was not found in OneDrive (_config/review_rules.json).</p></div>'; return; }
+  if(!rulesDraft || rulesOrig.version!==r.version){ rulesOrig=r; rulesDraft=JSON.parse(JSON.stringify(r)); }
+  const R=rulesDraft, admin=isAdmin(), dis=admin?'':'disabled';
+  const num=(path,val,w)=>`<input type="number" step="any" value="${val}" ${dis} style="width:${w||70}px" onchange="rulesSet('${path}',this.value,true)">`;
+  M.innerHTML=`<div class="card"><h2>Rules</h2><p class="muted">Version ${esc(R.version)} · approved by ${esc(R.approved_by||'')} ${esc(R.approved_at||'')}. The Friday review uses the approved version. ${admin?'Change anything, then press Save &amp; approve.':'Only an Admin can change the rules.'}</p>
+   <div class="row"><button class="btn sm sec" onclick="go('ana')">◀ Analysis</button></div></div>
+  <div class="card"><h2>Timeline</h2>${R.timeline.map((t,i)=>`<div class="row" style="margin-bottom:6px"><input value="${esc(t.when)}" ${dis} style="flex:1" onchange="rulesDraft.timeline[${i}].when=this.value"><input value="${esc(t.what)}" ${dis} style="flex:3" onchange="rulesDraft.timeline[${i}].what=this.value">${admin?`<button class="btn sm sec" onclick="rulesDraft.timeline.splice(${i},1);renderRules()">✖</button>`:''}</div>`).join('')}
+   ${admin?`<button class="btn sm sec" onclick="rulesDraft.timeline.push({when:'',what:''});renderRules()">+ Add</button>`:''}</div>
+  <div class="card"><h2>Return targets</h2><table>${Object.entries(R.return_targets).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${num('return_targets.'+k,v)} %</td><td><label style="font-weight:400;margin:0"><input type="checkbox" style="width:auto" ${dis} ${R.hold.includes(k)?'checked':''} onchange="rulesHold('${esc(k)}',this.checked)"> on hold</label></td></tr>`).join('')}</table></div>
+  <div class="card"><h2>Movement limits</h2><table>
+   <tr><td>Sold-out threshold for going up</td><td>${num('soldout_threshold_pct',R.soldout_threshold_pct)} % of delivery days</td></tr>
+   <tr><td>Step cap per branch per week</td><td>${num('step_cap_pct',R.step_cap_pct)} % of weekly volume</td></tr>
+   <tr><td>Step floor (small branches)</td><td>${num('step_floor',R.step_floor)} units</td></tr></table></div>
+  <div class="card"><h2>Contractual minimums (per day)</h2><table><tr><th>Branch</th><th>Large</th><th>Small</th><th>Focaccia</th></tr>${Object.entries(R.minimums).map(([k,m])=>`<tr><td>${esc(k)}</td><td>${num('minimums.'+k+'.large',m.large,50)}</td><td>${num('minimums.'+k+'.small',m.small,50)}</td><td>${num('minimums.'+k+'.foc',m.foc,50)}</td></tr>`).join('')}</table></div>
+  <div class="card"><h2>Seasonal adjustments</h2>${R.seasonal.map((z,i)=>`<div class="row" style="margin-bottom:6px"><input value="${esc(z.label)}" ${dis} style="flex:2" onchange="rulesDraft.seasonal[${i}].label=this.value"><input type="date" value="${z.from}" ${dis} onchange="rulesDraft.seasonal[${i}].from=this.value"><input type="date" value="${z.to}" ${dis} onchange="rulesDraft.seasonal[${i}].to=this.value"><input type="number" step="0.01" value="${z.factor}" ${dis} style="width:70px" onchange="rulesDraft.seasonal[${i}].factor=Number(this.value)">${admin?`<button class="btn sm sec" onclick="rulesDraft.seasonal.splice(${i},1);renderRules()">✖</button>`:''}</div>`).join('')}
+   <p class="muted">Factor 1.15 = +15%, 0.75 = −25%, on the proposed numbers for those dates.</p>${admin?`<button class="btn sm sec" onclick="rulesDraft.seasonal.push({label:'',from:'',to:'',factor:1});renderRules()">+ Add</button>`:''}</div>
+  <div class="card"><h2>All other rules</h2>${R.rules.map((t,i)=>`<div class="row" style="margin-bottom:6px"><textarea ${dis} style="flex:1;min-height:52px" onchange="rulesDraft.rules[${i}]=this.value">${esc(t)}</textarea>${admin?`<button class="btn sm sec" onclick="rulesDraft.rules.splice(${i},1);renderRules()">✖</button>`:''}</div>`).join('')}
+   ${admin?`<button class="btn sm sec" onclick="rulesDraft.rules.push('');renderRules()">+ Add rule</button>`:''}</div>
+  ${admin?`<div class="card"><button class="btn" onclick="rulesSave()">Save &amp; approve rules</button></div>`:''}`;
+}
+function rulesSet(path,val,isNum){ const p=path.split('.'); let o=rulesDraft; for(let i=0;i<p.length-1;i++) o=o[p[i]]; o[p[p.length-1]]=isNum?Number(val):val; }
+function rulesHold(k,on){ const h=new Set(rulesDraft.hold); on?h.add(k):h.delete(k); rulesDraft.hold=[...h]; }
+function rulesDiff(a,b,pre){ const out=[]; const keys=new Set([...Object.keys(a||{}),...Object.keys(b||{})]);
+  keys.forEach(k=>{ if(['version','approved_by','approved_at'].includes(k)) return; const x=a?a[k]:undefined, y=b?b[k]:undefined;
+    if(x&&y&&typeof x==='object'&&!Array.isArray(x)) out.push(...rulesDiff(x,y,(pre||'')+k+'.')); else if(JSON.stringify(x)!==JSON.stringify(y)) out.push((pre||'')+k+': '+(Array.isArray(x)?'(list changed)':JSON.stringify(x))+' → '+(Array.isArray(y)?'(list changed)':JSON.stringify(y))); });
+  return out; }
+async function rulesSave(){
+  if(!isAdmin()) return;
+  const d=rulesDiff(rulesOrig,rulesDraft);
+  if(!d.length){ alert('Nothing changed.'); return; }
+  if(!confirm('Approve these rule changes?\n\n'+d.slice(0,20).join('\n')+'\n\nThe next review will use them.')) return;
+  const now=new Date(); const nv=JSON.parse(JSON.stringify(rulesDraft));
+  nv.version=tsCompact(now)+'_'+slug(currentUser.name); nv.approved_by=currentUser.name; nv.approved_at=now.toISOString().slice(0,10); nv.previous_version=rulesOrig.version; nv.changes=d;
+  show('Saving rules…');
+  try{ await putJsonOverwrite(`_config/rules_history/review_rules_${nv.version}.json`,nv); await putJsonOverwrite('_config/review_rules.json',nv); }
+  catch(e){ hide(); alert('Saving failed: '+(e.message||e)); return; }
+  hide(); rulesDraft=null; alert('Rules approved and saved (version '+nv.version+').'); renderRules();
+}
+
+/* ---------- WEEKLY SUMMARY per client (read-only; = page 2 of the receipt) ---------- */
+let sWeek=null, sClient=null, sMonthly=false;
+async function renderSummary(){
+  if(!sWeek){ const t=new Date(); sWeek = t.getDay()===1 ? addDays(monday(t),-7) : monday(t); }
+  const idx=await loadDateIndex();
+  let from=sWeek, to=addDays(sWeek,6);
+  if(sClient && MONTHLY_CLIENTS.has(sClient)){ sMonthly=true; from=new Date(sWeek.getFullYear(),sWeek.getMonth(),1); to=new Date(sWeek.getFullYear(),sWeek.getMonth()+1,0); } else sMonthly=false;
+  show('Loading…'); const rr=rowsForRange(idx,from,to); const rows=rr?await loadBlock(rr.r1,rr.r2):[]; hide();
+  const clients=[...new Set(rows.map(x=>cName(x.name)).filter(Boolean))];
+  const order=c=>/^(Butcher|Village|Shoppers)/.test(c)?0:1; clients.sort((a,b)=>order(a)-order(b)||a.localeCompare(b));
+  if(!sClient || !clients.includes(sClient)) sClient=clients[0]||null;
+  const mine=rows.filter(x=>cName(x.name)===sClient && String(x.type||'').trim().toLowerCase()!=='sample' && PCAT[String(x.product||'').trim()]);
+  const days={}; for(let d=new Date(from); d<=to; d=addDays(d,1)) days[ymd(d)]={};
+  mine.forEach(x=>{ const k=ymd(x.date), c=PCAT[String(x.product).trim()]; const o=(days[k][c]=days[k][c]||{d:0,r:0,t:0,p:new Set()}); const dl=Number(x.plan)||0, rt=Number(x.ret)||0; o.d+=dl; o.r+=rt; o.t+=(dl-rt)*(Number(x.price)||0); if(Number(x.price)) o.p.add(Number(x.price)); });
+  const tot={}; CATS4.forEach(c=>tot[c]={d:0,r:0,t:0,p:new Set()});
+  Object.values(days).forEach(dd=>CATS4.forEach(c=>{ if(dd[c]){ tot[c].d+=dd[c].d; tot[c].r+=dd[c].r; tot[c].t+=dd[c].t; dd[c].p.forEach(p=>tot[c].p.add(p)); } }));
+  const grand=CATS4.reduce((s,c)=>s+tot[c].t,0);
+  const cell=o=>o?`${o.d}/${o.r}/<b>${o.d-o.r}</b>`:'';
+  const title=sMonthly?from.toLocaleString('en-GB',{month:'long',year:'numeric'}):`${ymd(from)} → ${ymd(to)}`;
+  M.innerHTML=`<div class="card"><div class="row"><button class="btn sm sec" onclick="sWeek=${sMonthly?'new Date(sWeek.getFullYear(),sWeek.getMonth()-1,1)':'addDays(sWeek,-7)'};renderSummary()">◀</button><div class="spacer" style="text-align:center;font-weight:600">${title}</div><button class="btn sm sec" onclick="sWeek=${sMonthly?'new Date(sWeek.getFullYear(),sWeek.getMonth()+1,1)':'addDays(sWeek,7)'};renderSummary()">▶</button></div>
+   <label>Client</label><select onchange="sClient=this.value;if(!MONTHLY_CLIENTS.has(this.value))sWeek=monday(sWeek);renderSummary()">${clients.map(c=>`<option ${c===sClient?'selected':''}>${esc(c)}${MONTHLY_CLIENTS.has(c)?' (monthly)':''}</option>`).join('')}</select>
+   <p class="muted" style="margin-top:6px">Read-only. Each cell is delivered / returned / <b>sold</b>. To correct a number, tap the day and fix it in Deliveries; this summary and the receipt follow automatically.${sMonthly?' Monthly bill: whole month shown.':''}</p></div>
+  <div class="card" style="overflow-x:auto"><table><tr><th>Day</th>${CATS4.map(c=>`<th class="num">${c}</th>`).join('')}<th class="num">TZS</th></tr>
+   ${Object.entries(days).map(([k,dd])=>{ const t=CATS4.reduce((s,c)=>s+(dd[c]?dd[c].t:0),0); if(sMonthly&&!CATS4.some(c=>dd[c]&&dd[c].d)) return '';
+     return `<tr style="cursor:pointer" onclick="dWeek=monday(new Date('${k}T00:00:00'));dOpenDay='${k}';go('deliv')"><td>${new Date(k+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'2-digit'})}</td>${CATS4.map(c=>`<td class="num">${cell(dd[c])}</td>`).join('')}<td class="num">${fmt(t)}</td></tr>`; }).join('')}
+   <tr class="tot"><td>Total</td>${CATS4.map(c=>`<td class="num">${cell(tot[c])}</td>`).join('')}<td class="num">${fmt(grand)}</td></tr>
+   <tr><td class="muted">Price</td>${CATS4.map(c=>`<td class="num muted">${[...tot[c].p].map(fmt).join(' / ')}</td>`).join('')}<td></td></tr></table></div>`;
+}
+
+/* ---------- DELIVERY-BOOK PHOTOS (per day, per client, several; queued if offline) ---------- */
+let dPhotos={};
+async function loadWeekPhotos(weekStart){
+  dPhotos={}; const months=[...new Set([0,6].map(n=>ymd(addDays(weekStart,n)).slice(0,7)))];
+  for(const mo of months){ try{ (await listFolder(`_data/delivery_books/${mo}`)).forEach(f=>{ const d=f.name.slice(0,10); (dPhotos[d]=dPhotos[d]||[]).push(f.name); }); }catch(e){} }
+  (await qAll()).filter(q=>q.kind==='photos').forEach(q=>{ const n=q.rel.split('/').pop(), d=n.slice(0,10); (dPhotos[d]=dPhotos[d]||[]).push(n+' (waiting)'); });
+}
+function photoBox(k,clients){
+  const list=(dPhotos[k]||[]).sort();
+  return `<div class="review" style="background:#faf5f0;border-color:var(--line)"><b>📷 Delivery books</b> <span class="muted">${list.length} photo(s)</span>
+   ${list.length?`<div style="margin:4px 0">${list.map(n=>n.endsWith('(waiting)')?`<span class="pill pend">${esc(n)}</span> `:`<a href="#" onclick="viewPhoto('${k.slice(0,7)}','${esc(n)}');return false" class="pill un" style="text-decoration:none">${esc(n.replace(k+'_','').replace('.jpg',''))}</a> `).join('')}</div>`:''}
+   ${can('write')?`<div class="row" style="margin-top:4px"><select id="pc_${k}" style="flex:1">${clients.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+   <label class="btn sm" style="margin:0;cursor:pointer">Add photo(s)<input type="file" accept="image/*" multiple style="display:none" onchange="addPhotos('${k}',this)"></label></div>`:''}
+   <div id="pv_${k}"></div></div>`;
+}
+function fileToCappedBlob(file){ return new Promise((res,rej)=>{ const img=new Image(); img.onload=()=>{ const c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight; c.getContext('2d').drawImage(img,0,0); canvasToCappedBlob(c,b=>{ URL.revokeObjectURL(img.src); b?res(b):rej(new Error('could not read image')); }); }; img.onerror=()=>rej(new Error('not an image')); img.src=URL.createObjectURL(file); }); }
+async function addPhotos(k,input){
+  const files=[...input.files]; if(!files.length) return;
+  if(!needDevice()) return;
+  const client=document.getElementById('pc_'+k).value;
+  const existing=(dPhotos[k]||[]).filter(n=>n.startsWith(k+'_'+slug(client)+'_')).length;
+  show(`Preparing ${files.length} photo(s)…`);
+  try{
+    for(let i=0;i<files.length;i++){
+      const blob=await fileToCappedBlob(files[i]);
+      const rel=`_data/delivery_books/${k.slice(0,7)}/${k}_${slug(client)}_${existing+i+1}.jpg`;
+      await qPut({rel,blob,kind:'photos',queued_at:new Date().toISOString(),tries:0});
+    }
+  }catch(e){ hide(); alert('Could not add photo: '+(e.message||e)); return; }
+  hide(); await flushQueue(); await loadWeekPhotos(dWeek);
+  const box=document.getElementById('pb_'+k); if(box) box.innerHTML=photoBox(k,JSON.parse(box.dataset.clients));
+}
+async function viewPhoto(mo,name){
+  const k=name.slice(0,10), el=document.getElementById('pv_'+k); if(!el) return;
+  el.innerHTML='<p class="muted">Loading photo…</p>';
+  try{ const u=await fetchBlobUrl(`_data/delivery_books/${mo}/${name}`); el.innerHTML=`<p class="muted" style="margin-top:6px">${esc(name)} <a href="${u}" target="_blank">open full size</a></p><img src="${u}" style="max-width:100%;border-radius:8px">`; }
+  catch(e){ el.innerHTML='<p class="err">Could not load the photo: '+esc(e.message)+'</p>'; }
+}
+
+/* ---------- MARK INVOICE PAID (Income page, Admin) ---------- */
+async function markPaid(weekLabel,weekStart,totRow,col,colName,amount,invNo,paid){
+  if(!isAdmin()) return;
+  const mode=saveMode(); if(mode!=='master' && !needDevice()) return;
+  if(!confirm(`Mark ${colName} ${weekLabel} (${fmt(amount)} TZS${invNo?', '+invNo:''}) as ${paid?'PAID':'PENDING'}?`)) return;
+  show('Saving…');
+  try{
+    if(mode!=='entries'){
+      await g(`${fileItemPath()}/workbook/worksheets('${encodeURIComponent('Invoices & Income')}')/range(address='${colLetter(col)}${totRow}')/format/fill`,{method:'PATCH',body:JSON.stringify({color:paid?PAID:PEND})});
+    }
+    if(mode!=='master'){
+      const now=new Date();
+      await enqueueEntry('payments',weekStart,[colName,paid?'paid':'pending'],{id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,week_label:weekLabel,week_start:weekStart,client_column:colName,invoice:invNo||'',amount,status:paid?'paid':'pending',entered_by:currentUser.name,device:deviceName(),at:now.toISOString(),save_mode:mode,app:APP_VERSION});
+      flushQueue();
+    }
+    cache.invFills[`${totRow}_${col}`]=paid?PAID:PEND;
+  }catch(e){ hide(); alert('Not saved: '+(e.message||e)+'\nIf the Master is open in Excel, close it and try again.'); return; }
+  hide(); renderIncome();
+}
+
 /* ---------- SYNC & BOOT ---------- */
 async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:{},monthBlocks:{},pdfLatest:null,recInv:null}; await render(); }
 (async function boot(){
@@ -1563,6 +1849,7 @@ async function fullSync(){ cache={dateIndex:null,exp:null,invRows:null,invFills:
     account = resp?.account || msalApp.getAllAccounts()[0] || null;
     if(account){ msalApp.setActiveAccount(account); document.getElementById('subtitle').textContent=account.username; document.getElementById('syncBtn').style.display=''; }
   }catch(e){ M.innerHTML=`<div class="err">Sign-in error: ${esc(e.message)}</div>`; }
+  if(account && !S.fileId){ try{ await autoLinkMaster(); }catch(e){} }
   go((!S.fileId||!account)?'set':'home');
   qBadge(); setTimeout(()=>flushQueue(),3000);
 })();
