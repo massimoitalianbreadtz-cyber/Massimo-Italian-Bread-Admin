@@ -814,19 +814,13 @@ async function renderIncome(){
 /* ---------- INVOICES (item 7: new page — weekly summaries + receipt verification, all read-only) ---------- */
 async function renderInvoices(){
   hide();
-  M.innerHTML=`<div class="card"><h2>Invoices</h2>
-  <p class="muted">This page is for checking numbers and generating/verifying weekly retailer invoices. It is read-only — any correction must be made on the Deliveries page (or in Excel), then re-synced.</p></div>
-  <div class="card"><h2>Generate receipts</h2>
-  <p class="muted">A web app cannot start a program on your computer for security reasons, so the buttons below can't literally run the .bat files. Double-click the file on your Desktop as usual, then use the list below to verify the PDFs it produced.</p>
-  ${[['Shoppers','Generate_Weekly_Shoppers_Receipts.bat'],['Village','Generate_Weekly_Village_Receipts.bat'],['Butcher','Generate_Weekly_Butcher_Receipts.bat']].map(([n,f])=>
-    `<div class="row" style="margin-bottom:8px"><b style="min-width:80px">${n}</b><span class="muted">Receipts\\${f}</span></div>`).join('')}
-  </div>
-  <div class="card"><h2>Weekly summaries (this week)</h2>
-  <p class="muted">Pulled from the Shoppers Receipts / Village Receipts / Butcher Receipts sheets (the same clean weekly data the receipt scripts use) rather than the daily working sheets, for reliability.</p>
-  <div id="invSummary">Loading…</div></div>
-  <div class="card"><h2>Latest generated receipts (one per branch)</h2><div id="invPdfList">Loading…</div></div>`;
-  await loadInvoiceSummaries();
-  await loadReceiptPdfs();
+  // 28 Sep 2026: invoices are now made in the app (Issue receipts). The laptop .bat generators are retired;
+  // the laptop only checks the issued invoices every night.
+  M.innerHTML=`<div id="invIssue"><div class="card"><p class="muted">Loading…</p></div></div>
+  <div class="card"><h2>Latest receipts in the shared drive (one per branch)</h2><div id="invPdfList">Loading…</div></div>`;
+  try{ await renderInvoicing(document.getElementById('invIssue')); }
+  catch(e){ hide(); document.getElementById('invIssue').innerHTML=`<div class="card err">Issue receipts could not load: ${esc(e.message||e)}</div>`; }
+  try{ await loadReceiptPdfs(); }catch(e){}
 }
 async function loadInvoiceSummaries(){
   // QC fix: the first version of this only confirmed "a row exists this week" and punted the
@@ -1416,7 +1410,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-09-27-planB-5';
+const APP_VERSION='2026-09-28-planB-6';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
@@ -1826,6 +1820,208 @@ async function markPaid(weekLabel,weekStart,totRow,col,colName,amount,invNo,paid
     cache.invFills[`${totRow}_${col}`]=paid?PAID:PEND;
   }catch(e){ hide(); alert('Not saved: '+(e.message||e)+'\nIf the Master is open in Excel, close it and try again.'); return; }
   hide(); renderIncome();
+}
+
+/* ================= INVOICING FROM THE APP (28 Sep 2026) =================
+   The app is now the ONLY invoice maker (the laptop scripts only CHECK the invoices every night).
+   Numbers are fixed by client + period, continuing the existing sequences, so two devices can never give
+   two different invoices the same number:  Shoppers 5 per week (SMA,SMB,SMI,STE,SML) from 29 Dec 2025;
+   Village/Butcher/Baraka/Karnitas one per week from their start; Lido/Geez one per month.
+   Each issued PDF is saved in Receipts\...\ (shared drive) and recorded in _data\invoices\ (who, when, totals). */
+const WAVE_LOGO='data:image/png;base64,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';
+let invCfg=null, invPeriod=null, invMonth=null;
+const CATNAME={letter:{Large:'Large bread',Baguette:'Baguette',Small:'Small bread',Focaccia:'Focaccia'},invoice:{Large:'Big Loaves',Baguette:'Baguette',Small:'Small Loaves',Focaccia:'Focaccia'}};
+const CATCOL={Large:'Big loaves',Baguette:'Baguette',Small:'Small Loaves',Focaccia:'Focaccia'};
+const MONTHS_EN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MSHORT=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fdLong=d=>`${d.getDate()} ${MONTHS_EN[d.getMonth()]} ${d.getFullYear()}`;
+const fdShort=d=>`${d.getDate()}-${MSHORT[d.getMonth()]}`;
+const tzs=n=>Math.round(n).toLocaleString('en-US')+' TZS';
+const rangeStr=(a,b)=>a.getMonth()===b.getMonth()?`${a.getDate()}-${b.getDate()}/${b.getMonth()+1}/${b.getFullYear()}`:`${a.getDate()}/${a.getMonth()+1}-${b.getDate()}/${b.getMonth()+1}/${b.getFullYear()}`;
+const dayDiff=(a,b)=>Math.round((b-a)/86400000);
+function loadScriptOnce(src){ return new Promise((res,rej)=>{ if(document.querySelector(`script[data-src="${src}"]`)) return res(); const s=document.createElement('script'); s.src=src; s.dataset.src=src; s.onload=res; s.onerror=()=>rej(new Error('Could not load '+src)); document.head.appendChild(s); }); }
+async function pdfLibs(){ await loadScriptOnce('jspdf.umd.min.js'); await loadScriptOnce('jspdf.plugin.autotable.min.js'); return window.jspdf.jsPDF; }
+async function loadInvCfg(){ if(invCfg) return invCfg; invCfg=await getJsonFile('_config/invoicing.json'); if(!invCfg) throw new Error('_config/invoicing.json not found in OneDrive'); return invCfg; }
+
+function invPeriodFor(c,anchor){ // anchor = Monday (weekly) or 1st of month (monthly)
+  if(c.billing==='monthly'){ const s=new Date(anchor.getFullYear(),anchor.getMonth(),1), e=new Date(anchor.getFullYear(),anchor.getMonth()+1,0); return {start:s,end:e,invDate:addDays(e,1)}; }
+  const s=monday(anchor), e=addDays(s,6); return {start:s,end:e,invDate:c.template==='letter'?e:addDays(e,1)};
+}
+function invNumber(c,p){
+  if(c.series==='shoppers'){ const idx=Math.round(dayDiff(new Date('2025-12-29T00:00:00'),p.start)/7); return {n:5*idx+c.offset, folderFrom:5*idx+1}; }
+  if(c.series==='monthly'){ const s=new Date(c.start+'T00:00:00'); return {n:(p.start.getFullYear()-s.getFullYear())*12+(p.start.getMonth()-s.getMonth())+1}; }
+  return {n:Math.round(dayDiff(new Date(c.start+'T00:00:00'),p.start)/7)+1};
+}
+function invFileRel(cfg,c,p,num){
+  const inv=`Invoice_${num.n}_${cfg.year_suffix}_${c.code}`;
+  if(c.series==='shoppers') return `Receipts/Shoppers_Receipts_2026/Invoices ${num.folderFrom}-${num.folderFrom+4}/${inv}.pdf`;
+  return `Receipts/${c.folder}/${inv}_${ymd(p.invDate)}.pdf`;
+}
+async function invData(c,p){
+  const idx=await loadDateIndex(); const rr=rowsForRange(idx,p.start,p.end); const rows=rr?await loadBlock(rr.r1,rr.r2):[];
+  const names=new Set(c.names.map(cName));
+  const mine=rows.filter(x=>names.has(cName(x.name)) && String(x.type||'').trim().toLowerCase()!=='sample' && PCAT[String(x.product||'').trim()]);
+  const days=[]; for(let d=new Date(p.start); d<=p.end; d=addDays(d,1)) days.push({d:new Date(d),del:{},ret:{}});
+  const lines={}; let total=0;
+  mine.forEach(x=>{ const k=ymd(x.date), cat=PCAT[String(x.product).trim()], day=days.find(z=>ymd(z.d)===k); if(!day) return;
+    const dl=Number(x.plan)||0, rt=Number(x.ret)||0, pr=Number(x.price)||0;
+    day.del[cat]=(day.del[cat]||0)+dl; day.ret[cat]=(day.ret[cat]||0)+rt;
+    const lk=cat+'|'+pr; (lines[lk]=lines[lk]||{cat,price:pr,qty:0,total:0}); lines[lk].qty+=dl-rt; lines[lk].total+=(dl-rt)*pr; total+=(dl-rt)*pr; });
+  const cats=[...new Set(c.cats.concat(Object.values(lines).filter(l=>l.qty).map(l=>l.cat)))].filter(x=>CATS4.includes(x)).sort((a,b)=>CATS4.indexOf(a)-CATS4.indexOf(b));
+  const lineList=cats.flatMap(cat=>{ const ls=Object.values(lines).filter(l=>l.cat===cat&&l.total); if(!ls.length) return [{cat,price:0,qty:0,total:0}]; return ls.sort((a,b)=>b.qty-a.qty); });
+  // units sold with no price in the master are left off the bill and flagged, never silently billed at 0
+  const noPrice=Object.values(lines).filter(l=>l.qty&&!l.price).reduce((s,l)=>s+l.qty,0);
+  return {days,cats,lines:lineList,total,rows:mine.length,noPrice};
+}
+async function invPdf(cfg,c,p,num,data){
+  const jsPDF=await pdfLibs(); const doc=new jsPDF({unit:'mm',format:'a4'}); const CO=cfg.company;
+  const invNo=`${num.n}/${cfg.year_suffix}/${c.code}`, W=210, L=20, R=190;
+  const line=(y,t)=>{ doc.setLineWidth(t||0.4); doc.line(L,y,R,y); };
+  const txt=(s,x,y,o)=>{ doc.setFont('helvetica',(o&&o.style)||'normal'); doc.setFontSize((o&&o.size)||9); doc.text(String(s),x,y,o&&o.align?{align:o.align}:undefined); };
+  const head=(withClient)=>{
+    try{ doc.addImage(WAVE_LOGO,'PNG',L,12,18,18); }catch(e){}
+    if(c.template==='letter'){
+      txt(CO.name,L,38,{style:'bold',size:18}); doc.setTextColor(120); txt(`${CO.address} ${CO.city}`,L,43,{style:'italic',size:9}); doc.setTextColor(0);
+      if(withClient){ let y=14; [c.bill_name,c.branch,c.address+',',c.city,'TIN: '+c.tin].forEach(s=>{ txt(s,R,y,{style:'bold',size:9,align:'right'}); y+=5; }); }
+      line(47,0.5); return 55;
+    }
+    txt(CO.name,R,16,{style:'bold',size:10,align:'right'}); txt(CO.address,R,21,{align:'right'}); txt(CO.city,R,26,{align:'right'}); line(34,0.8); return 42;
+  };
+  // ---- page 1
+  let y=head(true);
+  const body=data.lines.map(l=>[CATNAME[c.template][l.cat],String(l.qty),tzs(l.price),tzs(l.total)]);
+  if(c.template==='letter'){
+    txt(`Dar Es Salaam, ${fdLong(p.invDate)}`,L,y); y+=9;
+    txt(`Object: Invoice ${invNo} (bread supply ${rangeStr(p.start,p.end)})`,L,y,{style:'bold',size:11}); y+=6;
+    doc.autoTable({startY:y,margin:{left:L,right:W-R},head:[['Product','Quantity','Cost per Unit','Total']],body,foot:[['','','TOTAL',tzs(data.total)]],
+      theme:'grid',styles:{font:'helvetica',fontSize:9,textColor:0,lineColor:0,lineWidth:0.2,cellPadding:2},headStyles:{fillColor:255,textColor:0,fontStyle:'bold'},
+      footStyles:{fillColor:255,textColor:0,fontStyle:'bold',fontSize:10},columnStyles:{1:{halign:'center'},2:{halign:'center'},3:{halign:'center'}}});
+    y=doc.lastAutoTable.finalY+10;
+    txt('All prices are inclusive of V.A.T.',L,y); y+=8; txt('Payment can be done through bank transfer at:',L,y); y+=7;
+    txt(CO.bank,L,y,{style:'bold'}); y+=5; txt('Customer: '+CO.customer,L,y); y+=5; txt('Account Number: '+CO.account,L,y); y+=5; txt('Swift code: '+CO.swift,L,y); y+=10;
+    txt('With kind regards,',L,y); y+=7; txt(CO.brand,L,y);
+  } else {
+    txt('INVOICE',W/2,y,{style:'bold',size:14,align:'center'}); y+=9;
+    const monthly=c.billing==='monthly';
+    const meta=[['Invoice Number:',invNo],['Invoice Date:',fdLong(p.invDate)],[monthly?'Period:':'Week:',`${fdLong(p.start)} - ${fdLong(p.end)}`]];
+    let y2=y; meta.forEach(([a,b])=>{ txt(a,L+5,y2,{style:'bold'}); const w=doc.splitTextToSize(b,45); doc.setFont('helvetica','normal'); doc.text(w,L+40,y2); y2+=5*w.length+1; });
+    let y3=y; txt('Bill To:',120,y3,{style:'bold'}); y3+=5; txt(String(c.bill_name).toUpperCase(),120,y3,{style:'bold'}); y3+=5;
+    [c.address,c.city,c.tin?('TIN : '+c.tin):''].filter(Boolean).forEach(s=>{ txt(s,120,y3); y3+=5; });
+    y=Math.max(y2,y3)+2; line(y,0.4); y+=5;
+    doc.autoTable({startY:y,margin:{left:L,right:W-R},head:[['Product','Qty Sold','Unit Price','Total']],body,foot:[['TOTAL','','',tzs(data.total)]],
+      theme:'grid',styles:{font:'helvetica',fontSize:9,textColor:0,lineColor:0,lineWidth:0.2,cellPadding:2},headStyles:{fillColor:255,textColor:0,fontStyle:'bold'},
+      footStyles:{fillColor:255,textColor:0,fontStyle:'bold'},columnStyles:{1:{halign:'center'},2:{halign:'right'},3:{halign:'right'}}});
+    y=doc.lastAutoTable.finalY+7; txt('All prices are inclusive of V.A.T.',L,y,{size:8}); y+=6; line(y,0.3); y+=7;
+    txt('Payment Details',L,y,{style:'bold',size:11}); y+=7;
+    [['Bank:',CO.bank],['Account:',CO.account],['Swift:',CO.swift]].forEach(([a,b])=>{ txt(a,L+35,y,{style:'bold'}); txt(b,L+65,y); y+=5; });
+    y+=4; line(y,0.3); y+=6; doc.setFont('helvetica','italic'); doc.setFontSize(9); doc.text(`With kind regards, -- ${CO.brand}`,W/2,y,{align:'center'});
+  }
+  // ---- page 2: counting summary
+  doc.addPage(); y=head(false);
+  const who=c.template==='letter'?c.branch+' ':'';
+  txt(`Counting summary ${who}Invoice ${invNo} (bread supply ${rangeStr(p.start,p.end)})`,L,y,{style:'bold',size:c.billing==='monthly'?10:11}); y+=5;
+  const cols=data.cats, sum=(k,cat)=>data.days.reduce((s,d)=>s+(d[k][cat]||0),0);
+  const sec=(title,k)=>[[{content:title,colSpan:2+cols.length,styles:{fontStyle:'bold',halign:'left'}}],
+    ['DATE','DAY',...cols.map(x=>CATCOL[x])].map(t=>({content:t,styles:{fontStyle:'bold'}})),
+    ...data.days.filter(d=>!(k==='ret'&&c.billing==='monthly')||cols.some(cat=>d.ret[cat])).map(d=>[fdShort(d.d),DAYS7[(d.d.getDay()+6)%7],...cols.map(cat=>String(d[k][cat]||0))]),
+    [{content:'Total',colSpan:2,styles:{fontStyle:'bold',halign:'left'}},...cols.map(cat=>({content:String(sum(k,cat)),styles:{fontStyle:'bold'}}))]];
+  const rowsP2=[...sec('Delivered','del'),...sec(c.billing==='monthly'?'Returned (only days with returns)':'Returned','ret'),
+    [{content:'Sold (A-B)',colSpan:2,styles:{fontStyle:'bold',halign:'left'}},...cols.map(cat=>({content:String(sum('del',cat)-sum('ret',cat)),styles:{fontStyle:'bold'}}))]];
+  doc.autoTable({startY:y,margin:{left:L,right:W-R},body:rowsP2,theme:'grid',styles:{font:'helvetica',fontSize:c.billing==='monthly'?7:8,halign:'center',textColor:0,lineColor:0,lineWidth:0.2,cellPadding:c.billing==='monthly'?1:1.6}});
+  return doc.output('blob');
+}
+async function invOnDrive(cfg,c,p,num,dirCache){ // PDF with this number already in the Receipts folder?
+  const rel=invFileRel(cfg,c,p,num), dir=rel.split('/').slice(0,-1).join('/'), pre=`Invoice_${num.n}_${cfg.year_suffix}_${c.code}`;
+  if(!dirCache[dir]) dirCache[dir]=listFolder(dir).catch(()=>[]);
+  const kids=await dirCache[dir]; return kids.find(f=>f.name===pre+'.pdf'||f.name.startsWith(pre+'_'))||null;
+}
+async function invRegister(periodStartYmd){ try{ return await listFolder(`_data/invoices/${periodStartYmd.slice(0,7)}`); }catch(e){ return []; } }
+
+async function renderInvoicing(box){
+  const cfg=await loadInvCfg();
+  if(!invPeriod){ const t=new Date(); invPeriod=addDays(monday(t),-7); }
+  if(!invMonth){ const t=new Date(); invMonth=new Date(t.getFullYear(),t.getMonth()-1,1); }
+  const weekly=cfg.clients.filter(c=>c.billing==='weekly'), monthly=cfg.clients.filter(c=>c.billing==='monthly');
+  const reg=[...await invRegister(ymd(invPeriod)),...(ymd(invMonth).slice(0,7)!==ymd(invPeriod).slice(0,7)?await invRegister(ymd(invMonth)):[])];
+  const today=new Date(); today.setHours(0,0,0,0); const dirCache={};
+  const rowFor=async c=>{ const p=invPeriodFor(c,c.billing==='monthly'?invMonth:invPeriod); const num=invNumber(c,p); if(num.n<1) return '';
+    let d; try{ d=await invData(c,p); }catch(e){ return `<tr><td>${esc(c.code)}</td><td colspan="4" class="err">${esc(e.message)}</td></tr>`; }
+    const done=reg.filter(f=>f.name.startsWith(`${ymd(p.start)}__${c.code}__${num.n}__`)).sort((a,b)=>a.createdDateTime<b.createdDateTime?1:-1);
+    const unfinished=p.end>=today; const onDrive=done.length?null:await invOnDrive(cfg,c,p,num,dirCache);
+    const st=done.length?`<span class="pill paid">issued ${new Date(done[0].createdDateTime).toLocaleDateString('en-GB')} · ${esc(done[0].name.split('__')[5]||'')}</span>`
+      :onDrive?`<span class="pill paid">in shared drive${onDrive.createdDateTime?' '+new Date(onDrive.createdDateTime).toLocaleDateString('en-GB'):''}</span>`
+      :(unfinished?'<span class="pill pend">period not finished</span>':'<span class="pill un">not issued</span>');
+    const warn=d.noPrice?`<br><span class="pill pend">${d.noPrice} unit(s) with no price - left off</span>`:'';
+    const k=`${c.code}|${ymd(p.start)}`;
+    return `<tr><td><b>${esc(c.code)}</b><br><small class="muted">${esc(c.branch||c.bill_name)}</small></td><td>${num.n}/${cfg.year_suffix}/${c.code}<br><small class="muted">${ymd(p.start)} → ${ymd(p.end)}</small></td>
+      <td class="num">${fmt(d.total)}${d.total===0?'<br><span class="pill pend">ZERO</span>':''}${warn}</td><td>${st}</td>
+      <td style="white-space:nowrap"><button class="btn sm sec" onclick="invAction('${k}','preview')">Preview</button>
+      ${isAdmin()?`<button class="btn sm" onclick="invAction('${k}','issue')">${(done.length||onDrive)?'Re-issue':'Approve & issue'}</button>`:''}</td></tr>`; };
+  show('Preparing invoices…');
+  const wRows=(await Promise.all(weekly.map(rowFor))).join(''), mRows=(await Promise.all(monthly.map(rowFor))).join('');
+  hide();
+  box.innerHTML=`<div class="card"><h2>Issue receipts</h2>
+   <p class="muted">Numbers continue the existing sequences and are fixed per client and period. Issued PDFs are saved in the shared drive (Receipts folders) and recorded with who issued them. ${isAdmin()?'':'Only an Admin can issue.'}</p>
+   <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="invPeriod=addDays(invPeriod,-7);renderInvoices()">◀</button><div class="spacer" style="text-align:center;font-weight:600">Week ${ymd(invPeriod)} → ${ymd(addDays(invPeriod,6))}</div><button class="btn sm sec" onclick="invPeriod=addDays(invPeriod,7);renderInvoices()">▶</button></div>
+   <div style="overflow-x:auto"><table><tr><th>Client</th><th>Invoice</th><th class="num">TZS</th><th>Status</th><th></th></tr>${wRows}</table></div>
+   ${isAdmin()?`<div class="row" style="margin-top:6px"><button class="btn sm" onclick="invIssueAll()">Approve & issue all not yet issued (this week)</button></div>`:''}
+   <div class="row" style="margin-top:14px"><button class="btn sm sec" onclick="invMonth=new Date(invMonth.getFullYear(),invMonth.getMonth()-1,1);renderInvoices()">◀</button><div class="spacer" style="text-align:center;font-weight:600">Monthly bills — ${MONTHS_EN[invMonth.getMonth()]} ${invMonth.getFullYear()}</div><button class="btn sm sec" onclick="invMonth=new Date(invMonth.getFullYear(),invMonth.getMonth()+1,1);renderInvoices()">▶</button></div>
+   <div style="overflow-x:auto"><table><tr><th>Client</th><th>Invoice</th><th class="num">TZS</th><th>Status</th><th></th></tr>${mRows}</table></div>
+   <div id="invOut"></div></div>`;
+}
+let _lastPdf=null;
+async function invAction(k,what,silent){
+  const [code,start]=k.split('|'); const cfg=await loadInvCfg(); const c=cfg.clients.find(x=>x.code===code);
+  const p=invPeriodFor(c,new Date(start+'T00:00:00')); const num=invNumber(c,p);
+  const today=new Date(); today.setHours(0,0,0,0);
+  if(what==='issue'){
+    if(!isAdmin()) return;
+    if(saveMode()!=='master' && !needDevice()) return;
+    if(p.end>=today && !confirm('This period has not finished yet. Issue anyway (provisional)?')) return;
+  }
+  show('Building PDF…');
+  let data, blob;
+  try{ data=await invData(c,p); blob=await invPdf(cfg,c,p,num,data); }catch(e){ hide(); alert('Could not build the PDF: '+(e.message||e)); return false; }
+  hide();
+  const fileName=invFileRel(cfg,c,p,num).split('/').pop();
+  if(what==='preview'){ const u=URL.createObjectURL(blob); window.open(u,'_blank'); return; }
+  if(!silent && !confirm(`Issue invoice ${num.n}/${cfg.year_suffix}/${c.code} for ${c.branch||c.bill_name}, ${ymd(p.start)} to ${ymd(p.end)}: ${tzs(data.total)}?${data.total===0?'\n\nWARNING: total is ZERO.':''}${data.noPrice?`\n\nWARNING: ${data.noPrice} unit(s) have no price in the Master and are left off this invoice. Fix the price first if they should be billed.`:''}\n\nIt will be saved in the shared drive (${invFileRel(cfg,c,p,num).split('/').slice(0,-1).join('/')}).`)) return false;
+  show('Saving to the shared drive…');
+  try{
+    const saved=await putBinaryFile(invFileRel(cfg,c,p,num),new File([blob],fileName,{type:'application/pdf'}));
+    const now=new Date();
+    await putJsonFile(`_data/invoices/${ymd(p.start).slice(0,7)}/${ymd(p.start)}__${c.code}__${num.n}__${tsCompact(now)}__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`,
+      {invoice:`${num.n}/${cfg.year_suffix}/${c.code}`,code:c.code,names:c.names,period:{start:ymd(p.start),end:ymd(p.end)},invoice_date:ymd(p.invDate),total:data.total,
+       lines:data.lines,file:invFileRel(cfg,c,p,num),saved_as:saved&&saved.name,issued_by:currentUser.name,device:deviceName(),at:now.toISOString(),app:APP_VERSION});
+  }catch(e){ hide(); alert('NOT saved: '+(e.message||e)+'\nNothing was issued - try again when there is signal.'); return false; }
+  hide();
+  _lastPdf={blob,fileName};
+  if(!silent){
+    const o=document.getElementById('invOut');
+    if(o) o.innerHTML=`<div class="review">✓ Saved <b>${esc(fileName)}</b> in the shared drive. <button class="btn sm" onclick="invPrint()">Print / Share</button> <button class="btn sm sec" onclick="renderInvoices()">Refresh list</button></div>`;
+  }
+  return true;
+}
+async function invPrint(){
+  if(!_lastPdf) return;
+  const f=new File([_lastPdf.blob],_lastPdf.fileName,{type:'application/pdf'});
+  if(navigator.canShare && navigator.canShare({files:[f]})){ try{ await navigator.share({files:[f],title:_lastPdf.fileName}); return; }catch(e){} }
+  window.open(URL.createObjectURL(_lastPdf.blob),'_blank');
+}
+async function invIssueAll(){
+  const cfg=await loadInvCfg(); const reg=await invRegister(ymd(invPeriod)); const today=new Date(); today.setHours(0,0,0,0);
+  show('Checking…'); const dirCache={}, todo=[], skipped=[];
+  for(const c of cfg.clients.filter(c=>c.billing==='weekly')){ const p=invPeriodFor(c,invPeriod), num=invNumber(c,p);
+    if(num.n<1 || p.end>=today || reg.some(f=>f.name.startsWith(`${ymd(p.start)}__${c.code}__${num.n}__`))) continue;
+    if(await invOnDrive(cfg,c,p,num,dirCache)){ skipped.push(c.code+' (already in shared drive)'); continue; }
+    let d; try{ d=await invData(c,p); }catch(e){ skipped.push(c.code+' (error)'); continue; }
+    if(!d.total){ skipped.push(c.code+' (zero)'); continue; }
+    todo.push({c,p,num,d}); }
+  hide();
+  if(!todo.length){ alert('Nothing left to issue for this week.'+(skipped.length?'\nSkipped: '+skipped.join(', '):'')); return; }
+  if(!confirm(`Issue ${todo.length} invoice(s) for the week of ${ymd(invPeriod)}:\n${todo.map(x=>`${x.c.code}  ${tzs(x.d.total)}`).join('\n')}${skipped.length?'\n\nSkipped: '+skipped.join(', '):''}${todo.some(x=>x.d.noPrice)?'\n\nWARNING: some units have no price and are left off - see the list.':''}`)) return;
+  let ok=0; for(const x of todo){ if(await invAction(`${x.c.code}|${ymd(x.p.start)}`,'issue',true)) ok++; }
+  alert(`${ok} of ${todo.length} invoice(s) issued and saved in the shared drive.`); renderInvoices();
 }
 
 /* ---------- SYNC & BOOT ---------- */
