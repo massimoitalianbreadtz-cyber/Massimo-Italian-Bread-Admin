@@ -1410,7 +1410,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-09-28-planB-6';
+const APP_VERSION='2026-11-17-planB-7';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
@@ -1594,77 +1594,256 @@ async function fetchBlobUrl(rel){
   if(!r.ok) throw new Error('HTTP '+r.status); return URL.createObjectURL(await r.blob());
 }
 
-/* ---------- ANALYSIS (review proposals -> approve / edit / reject -> apply to next week's Deliveries) ---------- */
-let ana=null; // {rev, final:{key:value}, status:{rowKey:'ok'|'no'}, applied}
+/* ---------- ANALYSIS v7 (15 Nov 2026, Gu) ----------
+   Wednesday review -> plan Friday to Thursday. Three steps, in this order:
+   1. PLAN: per retailer, each number is the planned one, the proposed one or the Admin's own; ONE button
+      "Save the changes" per retailer stores exactly what is on screen (shared drive: _data/plan_drafts,
+      so it survives a reload and shows on the other device).
+   2. OVENS & TRAYS: per day, trays and ovens for white, brown and focaccia. Whenever the breads do not
+      fill their trays, or the trays do not pair up into ovens, the Admin chooses reduce or increase; the
+      app suggests the lines and every suggested number stays editable.
+   3. APPLY: the numbers go to Deliveries (Master), then the print list (Date, Day, Name, Detailed product,
+      Produced, Returned /Charity) is saved in Receipts/Weekly_Plans and a mail request is left for the laptop. */
+let ana=null; // {rev, dates, R, final:{key:n}, saved:{retailer:{by,at}}, dirty:{retailer:true}, open:{}, step, tray:{adj:{}}, mrows, applied}
 const anaKey=l=>l.retailer+'|'+l.product+'|'+l.date;
-const anaRowKey=l=>l.retailer+'|'+l.product;
+const anaEff=l=>{ const k=anaKey(l); const a=ana.tray&&ana.tray.adj[k]; return (a===undefined||a===null)?(Number(ana.final[k])||0):a; };
+const PLAN_DRAFTS='_data/plan_drafts';
+const TRAY_CAP={white:24,brown:24,foc15:15,foc10:10};   // bread in 1/24 of a tray: large or baguette 6, small 3, sandwich 2
+const TRAY_NAME={white:'White',brown:'Brown',foc15:'Focaccia (Shoppers/Butcher, 15 a tray)',foc10:'Focaccia Lido (10 a tray)'};
+const BREAD_UNITS={'White Bread loaf':['white',6],'White Baguette':['white',6],'White Bread half loaf':['white',3],'Small':['white',2],'Brown Bread loaf':['brown',6],'Brown Bread half loaf':['brown',3]};
+function trayClass(name,product){
+  const p=String(product||'').trim(); if(!p||/^bread crumbs$/i.test(p)) return null;
+  if(/^focaccia/i.test(p)) return /^lido$/i.test(String(name||'').trim())?['foc10',1]:['foc15',1];
+  return BREAD_UNITS[p]||['other',0];
+}
+function trayCalc(lines,dates){ // lines [{date,name,product,qty}] -> {date:{white:{u,n,trays,rem},brown,foc15,foc10,breadTrays,focTrays,other}}
+  const out={}; const blank=()=>({white:{u:0,n:{}},brown:{u:0,n:{}},foc15:{u:0,n:{}},foc10:{u:0,n:{}},other:[]});
+  (dates||[]).forEach(d=>out[d]=blank());
+  lines.forEach(l=>{ const q=Number(l.qty)||0; if(!q) return; const c=trayClass(l.name,l.product); if(!c) return;
+    const d=(out[l.date]=out[l.date]||blank());
+    if(c[0]==='other'){ d.other.push(`${l.name||'no name'} / ${l.product} x${q}`); return; }
+    d[c[0]].u+=q*c[1]; const sz=c[0].startsWith('foc')?'pcs':(c[1]===6?'large':c[1]===3?'small':'sandwich'); d[c[0]].n[sz]=(d[c[0]].n[sz]||0)+q; });
+  Object.values(out).forEach(d=>{ Object.keys(TRAY_CAP).forEach(g=>{ d[g].trays=Math.ceil(d[g].u/TRAY_CAP[g]); d[g].rem=d[g].u%TRAY_CAP[g]; });
+    d.breadTrays=d.white.trays+d.brown.trays; d.focTrays=d.foc15.trays+d.foc10.trays; });
+  return out;
+}
+const ovTxt=t=>{ const o=Math.floor(t/2); return t%2?(o?o+'½':'½'):String(o); };
+function trayTotals(calc,dates){ return dates.reduce((T,dt)=>{ const d=calc[dt]; T.white+=d.white.trays; T.brown+=d.brown.trays; T.foc+=d.focTrays; return T; },{white:0,brown:0,foc:0}); }
+function trayIssues(calc,dates){
+  const iss=[];
+  dates.forEach(dt=>{ const d=calc[dt]; if(!d) return;
+    Object.keys(TRAY_CAP).forEach(g=>{ if(d[g].rem) iss.push({date:dt,kind:'fill',g,down:d[g].rem,up:TRAY_CAP[g]-d[g].rem}); });
+    if(!d.white.rem&&!d.brown.rem&&d.breadTrays%2) iss.push({date:dt,kind:'pair',g:'bread'});
+    if(!d.foc15.rem&&!d.foc10.rem&&d.focTrays%2) iss.push({date:dt,kind:'pair',g:'foc'});
+    if(d.other.length) iss.push({date:dt,kind:'other',list:d.other}); });
+  return iss;
+}
+// Suggest which retailer lines take a change of `delta` tray units on one day (+ add, - remove).
+// Increases go first to the branch furthest UNDER its return target, reductions to the one furthest OVER it;
+// one loaf per branch per round so the change is spread; branches on hold (contract minimums) are never touched.
+function traySuggest(rev,effOf,date,g,delta){
+  const sc={}; (rev.scoreboard||[]).forEach(x=>sc[x.retailer]=(Number(x.returns_pct)||0)-(Number(x.target)||0));
+  const hold=new Set(rev.hold||[]);
+  const pool=rev.lines.filter(l=>l.date===date&&!hold.has(l.retailer)).map(l=>({l,c:trayClass(l.retailer,l.product)})).filter(x=>x.c&&x.c[0]===g);
+  const rs=[...new Set(pool.map(x=>x.l.retailer))].sort((a,b)=>delta>0?(sc[a]||0)-(sc[b]||0):(sc[b]||0)-(sc[a]||0));
+  const val={}; pool.forEach(x=>val[anaKey(x.l)]=effOf(x.l));
+  let left=Math.abs(delta), guard=0;
+  while(left>0&&guard++<500){ let moved=false;
+    for(const r of rs){ if(left<=0) break;
+      const c=pool.filter(x=>x.l.retailer===r&&x.c[1]<=left&&(delta>0||val[anaKey(x.l)]>0)).sort((a,b)=>b.c[1]-a.c[1]||val[anaKey(b.l)]-val[anaKey(a.l)]);
+      if(!c.length) continue; const k=anaKey(c[0].l); val[k]+=delta>0?1:-1; left-=c[0].c[1]; moved=true; }
+    if(!moved) break; }
+  const changes={}; pool.forEach(x=>{ const k=anaKey(x.l); if(val[k]!==effOf(x.l)) changes[k]=val[k]; });
+  return {changes,left};
+}
+const unitsTxt=(g,u)=>g.startsWith('foc')?`${u} piece${u===1?'':'s'}`:(u%3===0?`${u/3} small (1 large = 2 small)`:`${(u/3).toFixed(1)} small-loaf places`);
+const anaDates=rev=>{ const a=new Date(rev.next_week.start+'T00:00:00'), b=new Date(rev.next_week.end+'T00:00:00'), o=[]; for(let d=a;d<=b;d=addDays(d,1)) o.push(ymd(d)); return o; };
+const dayShort=dt=>{ const x=new Date(dt+'T00:00:00'); return DAYS7[(x.getDay()+6)%7].slice(0,3)+' '+x.getDate(); };
+const dayLong=dt=>{ const x=new Date(dt+'T00:00:00'); return DAYS7[(x.getDay()+6)%7]+' '+fdLong(x); };
+
+async function anaLoadDrafts(){ // newest saved draft per retailer for this review
+  const rev=ana.rev; let files=[];
+  try{ files=(await listFolder(`${PLAN_DRAFTS}/${rev.next_week.start.slice(0,7)}`)).filter(f=>f.name.startsWith(rev.next_week.start+'__')); }catch(e){ return; }
+  const newest={}; files.forEach(f=>{ const s=f.name.split('__')[1]; if(!newest[s]||newest[s].createdDateTime<f.createdDateTime) newest[s]=f; });
+  for(const r of ana.R){ const f=newest[slug(r)]; if(!f) continue;
+    try{ const j=await getJsonFile(`${PLAN_DRAFTS}/${rev.next_week.start.slice(0,7)}/${f.name}`);
+      if(!j||j.review!==rev.generated_at||j.retailer!==r) continue;
+      rev.lines.filter(l=>l.retailer===r).forEach(l=>{ const v=j.values[l.product+'|'+l.date]; if(v!==undefined) ana.final[anaKey(l)]=Number(v)||0; });
+      ana.saved[r]={by:j.saved_by,at:j.at}; }catch(e){} }
+}
+async function anaLoadMaster(force){
+  if(ana.mrows&&!force) return ana.mrows;
+  const idx=await loadDateIndex(true); const a=new Date(ana.rev.next_week.start+'T00:00:00'), b=new Date(ana.rev.next_week.end+'T00:00:00');
+  const rr=rowsForRange(idx,a,b); if(!rr) throw new Error('The plan dates have no rows in the Master yet.');
+  ana.mrows=await loadBlock(rr.r1,rr.r2); return ana.mrows;
+}
+// every line of the plan days: the Master's rows (samples, Lido, G'eez, clients included) with the plan numbers laid over the retailer lines
+function anaAllLines(){
+  const rev=ana.rev, byKey={}; rev.lines.forEach(l=>byKey[cName(l.retailer)+'|'+l.product+'|'+l.date]=l);
+  const used=new Set(), out=[];
+  (ana.mrows||[]).forEach(x=>{ if(!x.date) return; const dt=ymd(x.date); if(dt<rev.next_week.start||dt>rev.next_week.end) return;
+    const sample=String(x.type||'').trim().toLowerCase()==='sample', prod=String(x.product||'').trim(), k=cName(x.name)+'|'+prod+'|'+dt;
+    const l=(!sample&&byKey[k]&&!used.has(k))?byKey[k]:null; if(l) used.add(k);
+    out.push({date:dt,day:String(x.day||''),name:String(x.name||'').trim(),product:prod,sample,qty:l?anaEff(l):(Number(x.plan)||0),ret:x.ret,price:x.price,row:x.row,line:l}); });
+  rev.lines.forEach(l=>{ const k=cName(l.retailer)+'|'+l.product+'|'+l.date; if(!used.has(k)) out.push({date:l.date,day:l.day,name:l.retailer,product:l.product,sample:false,qty:anaEff(l),ret:null,row:null,line:l,missing:true}); });
+  return out;
+}
+const anaKeepOpen=()=>{ Object.keys(ana.open||{}).forEach(i=>{ const b=document.getElementById('an_'+i); if(b&&ana.open[i]) b.style.display=''; }); };
+function anaToggle(ri){ const b=document.getElementById('an_'+ri); const on=b.style.display==='none'; b.style.display=on?'':'none'; ana.open[ri]=on; }
+
+// 17 Nov 2026: the review writes _plan/status.json on every run. If it stopped (returns missing), the page says
+// which days are missing; an Admin enters them in Deliveries and presses "Run the review again" -> a request file
+// in _data/requests, which the laptop job (laptop_jobs.py, every 10 min) runs once.
+async function anaStatusHtml(rev){
+  let st=null; try{ st=await getJsonFile('_plan/status.json'); }catch(e){}
+  const mo=ymd(new Date()).slice(0,7), pm=ymd(addDays(new Date(new Date().getFullYear(),new Date().getMonth(),1),-1)).slice(0,7);
+  let reqs=[]; for(const m of [mo,pm]){ try{ reqs=reqs.concat(await listFolder(`_data/requests/${m}`)); }catch(e){} }
+  const since=st&&st.run_at_utc?st.run_at_utc:'';
+  const pending=reqs.filter(f=>f.name.includes('__run-review__')&&(!since||new Date(f.createdDateTime)>new Date(since))).sort((a,b)=>a.createdDateTime<b.createdDateTime?1:-1);
+  const fmtD=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+  const stopped=st&&st.result==='incomplete'&&(!rev||String(st.run_at)>String(rev.generated_at));
+  const btn=isAdmin()?`<button class="btn sm" ${pending.length?'disabled':''} onclick="anaRequestRun()">🔄 Run the review again</button>`:'';
+  const pend=pending.length?`<p><b>⏳ Requested by ${esc(pending[0].name.split('__')[3]||'')} at ${new Date(pending[0].createdDateTime).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}.</b> The laptop runs it within about 15 minutes (it must be on). Reload this page to see the result.</p>`:'';
+  if(stopped) return `<div class="card" style="border:2px solid #b45309"><h2>⚠ The review stopped: returns missing</h2>
+    <p>The review of ${fmtD(st.window.start)} – ${fmtD(st.window.end)} (run ${new Date(st.run_at).toLocaleString('en-GB',{weekday:'short',hour:'2-digit',minute:'2-digit'})}) found deliveries with no returns entered on:
+    <b>${st.missing.map(m=>`${fmtD(m.date)} (${m.lines} lines)`).join(', ')}</b>. Missing returns would count as sell-outs, so nothing was proposed.</p>
+    <p>Enter those returns in <b>Deliveries</b>, then run the review again. The plan for ${fmtD(st.next_week.start)} – ${fmtD(st.next_week.end)} will appear here.</p>
+    ${pend}<div class="row">${btn}<button class="btn sm sec" onclick="dWeek=monday(new Date('${st.missing.length?st.missing[0].date:st.window.start}T00:00:00'));go('deliv')">Open Deliveries</button></div></div>`;
+  if(pend) return `<div class="card">${pend}</div>`;
+  return '';
+}
+async function anaRequestRun(){
+  if(!isAdmin()||!needDevice()) return;
+  if(!confirm('Ask the laptop to run the review again now?\n\nEnter all missing returns first. The laptop runs it within about 15 minutes; it must be switched on.')) return;
+  const now=new Date(), body={id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,kind:'run_review',requested_by:currentUser.name,device:deviceName(),at:now.toISOString(),app:APP_VERSION};
+  await qPut({rel:`_data/requests/${ymd(now).slice(0,7)}/${tsCompact(now)}__run-review__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`,body,kind:'requests',queued_at:now.toISOString(),tries:0});
+  await flushQueue(); await renderAnalysis();
+}
 async function renderAnalysis(){
   show('Loading the latest review…');
   let rev=null; try{ rev=await getJsonFile('_plan/latest.json'); }catch(e){ rev=null; }
+  const stHtml=await anaStatusHtml(rev);
   let applied=[];
   if(rev){ try{ applied=(await listFolder(`_data/approvals/${rev.next_week.start.slice(0,7)}`)).filter(f=>f.name.startsWith(rev.next_week.start+'__')).sort((a,b)=>a.createdDateTime<b.createdDateTime?1:-1); }catch(e){} }
-  hide();
   const rulesBtn=`<button class="btn sm sec" onclick="go('rules')">📋 Rules</button>`;
-  if(!rev){ M.innerHTML=`<div class="card"><h2>Analysis</h2><p class="muted">No review yet. The laptop writes one every Friday evening. You can still change any number for next week directly in <b>Deliveries</b>.</p><div class="row">${rulesBtn}<button class="btn sm" onclick="dWeek=addDays(monday(new Date()),7);go('deliv')">Open next week in Deliveries</button></div></div>`; return; }
+  if(!rev){ hide(); M.innerHTML=stHtml+`<div class="card"><h2>Analysis</h2><p class="muted">No review yet. The laptop writes one every Wednesday at 14:00. You can still change any number directly in <b>Deliveries</b>.</p><div class="row">${rulesBtn}<button class="btn sm" onclick="dWeek=addDays(monday(new Date()),7);go('deliv')">Open next week in Deliveries</button></div></div>`; return; }
   if(!ana || ana.rev.generated_at!==rev.generated_at){
-    ana={rev,final:{},status:{}};
+    ana={rev,final:{},saved:{},dirty:{},open:{},step:'plan',tray:{adj:{}},mrows:null};
+    ana.dates=anaDates(rev); ana.R=[...new Set(rev.lines.map(l=>l.retailer))];
     rev.lines.forEach(l=>{ ana.final[anaKey(l)]=l.to; });
+    if(applied.length){ try{ const j=await getJsonFile(`_data/approvals/${rev.next_week.start.slice(0,7)}/${applied[0].name}`); if(j&&j.review===rev.generated_at) j.lines.forEach(l=>{ ana.final[l.retailer+'|'+l.product+'|'+l.date]=Number(l.final)||0; }); }catch(e){} }
+    else await anaLoadDrafts();
   }
-  ana.applied=applied;
-  const admin=isAdmin();
-  const byR={}; rev.lines.forEach(l=>{ (byR[l.retailer]=byR[l.retailer]||[]).push(l); });
-  const nowTot=rev.lines.reduce((s,l)=>s+l.from,0), newTot=rev.lines.reduce((s,l)=>s+(Number(ana.final[anaKey(l)])||0),0);
-  const changedRows=new Set(rev.lines.filter(l=>l.to!==l.from).map(anaRowKey));
-  const undecided=[...changedRows].filter(k=>!ana.status[k]).length;
-  const netRow={}; rev.lines.forEach(l=>{ const k=anaRowKey(l); netRow[k]=(netRow[k]||0)+(l.to-l.from); });
-  const incUp=Object.values(netRow).filter(v=>v>0).reduce((s,v)=>s+v,0); // same as the report: net per product
-  const fmtD=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+  ana.applied=applied; hide();
+  const admin=isAdmin(), locked=!admin||!!applied.length, dates=ana.dates;
+  const nowTot=rev.lines.reduce((s,l)=>s+l.from,0), newTot=rev.lines.reduce((s,l)=>s+anaEff(l),0);
+  const fmtD=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
   const score=rev.scoreboard.map(x=>{ const icon=x.action==='up'?'🟢':x.action==='down'?'🔴':String(x.action).startsWith('hold')?'⏸':x.action==='watch'?'🟠':'⚪';
     return `<tr><td>${esc(x.retailer.replace('Shoppers ',''))}</td><td class="num">${x.delivered??''}</td><td class="num">${x.sold??''}</td><td class="num">${Math.round(x.returns_pct)}%</td><td class="num">${Math.round(x.target)}%</td><td>${icon} ${esc(x.verdict||x.action)}</td></tr>`; }).join('');
-  const branchCards=Object.entries(byR).map(([r,ls])=>{
-    const prods=[...new Set(ls.map(l=>l.product))];
-    const days=DAYS7.filter(d=>ls.some(l=>l.day===d));
-    const from=ls.reduce((s,l)=>s+l.from,0), to=ls.reduce((s,l)=>s+(Number(ana.final[anaKey(l)])||0),0);
-    const rows=prods.map(p=>{
-      const pl=ls.filter(l=>l.product===p); const rk=r+'|'+p; const ch=changedRows.has(rk); const st=ana.status[rk];
+  const nSaved=ana.R.filter(r=>ana.saved[r]&&!ana.dirty[r]).length;
+  const branchCards=ana.R.map((r,ri)=>{
+    const ls=rev.lines.filter(l=>l.retailer===r), prods=[...new Set(ls.map(l=>l.product))];
+    const from=ls.reduce((s,l)=>s+l.from,0), to=ls.reduce((s,l)=>s+anaEff(l),0);
+    const rows=prods.map((p,pi)=>{
+      const pl=ls.filter(l=>l.product===p), ch=pl.some(l=>l.to!==l.from);
       const why=[...new Set(pl.map(l=>l.reason).filter(Boolean))].join(' / ');
-      return `<tr style="${st==='no'?'opacity:.55':''}"><td>${esc(p)}${why?`<br><small class="muted">${esc(why)}</small>`:''}</td>${days.map(d=>{ const l=pl.find(x=>x.day===d); if(!l) return '<td></td>';
-        const v=ana.final[anaKey(l)], up=l.to>l.from, dn=l.to<l.from;
-        return `<td class="num">${l.to!==l.from?`<small class="muted">${l.from}→</small>`:''}<input class="cell" style="width:44px;${up?'background:#e6f4e6;font-weight:700':dn?'background:#fff3e0':''}" type="number" min="0" value="${v}" ${admin&&!ana.applied.length?`onchange="anaEdit('${esc(anaKey(l)).replace(/'/g,"\\'")}',this.value,'${esc(rk).replace(/'/g,"\\'")}')"`:'readonly'}></td>`; }).join('')}
-      <td style="white-space:nowrap">${ch&&admin&&!ana.applied.length?`<button class="btn sm ${st==='ok'?'':'sec'}" onclick="anaSet('${esc(rk).replace(/'/g,"\\'")}','ok')">✅</button> <button class="btn sm ${st==='no'?'':'sec'}" onclick="anaSet('${esc(rk).replace(/'/g,"\\'")}','no')">✖</button>`:(ch?(st==='ok'?'✅':st==='no'?'✖':''):'')}</td></tr>`; }).join('');
-    return `<div class="card"><div class="day-head" onclick="const b=document.getElementById('an_${slug(r)}');b.style.display=b.style.display==='none'?'':'none'"><span>${esc(r)}: ${from} → <b>${to}</b></span><span class="muted">${to-from>0?'+':''}${to-from}</span></div>
-      <div id="an_${slug(r)}" style="display:none;overflow-x:auto"><table><tr><th>Product</th>${days.map(d=>`<th class="num">${d.slice(0,3)}</th>`).join('')}<th></th></tr>${rows}</table>
-      ${admin&&!ana.applied.length?`<div class="row" style="margin-top:6px"><button class="btn sm" onclick="anaAll('${esc(r).replace(/'/g,"\\'")}','ok')">Approve all for ${esc(r.replace('Shoppers ',''))}</button><button class="btn sm sec" onclick="anaAll('${esc(r).replace(/'/g,"\\'")}','no')">Reject all</button></div>`:''}</div></div>`;
+      return `<tr><td>${esc(p)}${why?`<br><small class="muted">${esc(why)}</small>`:''}</td>${dates.map(d=>{ const l=pl.find(x=>x.date===d); if(!l) return '<td></td>';
+        const li=rev.lines.indexOf(l), v=anaEff(l), up=l.to>l.from, dn=l.to<l.from;
+        return `<td class="num">${l.to!==l.from?`<small class="muted">${l.from}→${l.to}</small><br>`:''}<input class="cell" id="anc_${li}" style="width:44px;${up?'background:#e6f4e6;font-weight:700':dn?'background:#fff3e0':''}" type="number" min="0" value="${v}" ${locked?'readonly':`onchange="anaEdit(${li},this.value)"`}></td>`; }).join('')}
+      <td style="white-space:nowrap">${ch&&!locked?`<button class="btn sm sec" title="Keep the planned numbers" onclick="anaRow(${ri},${pi},'from')">Planned</button> <button class="btn sm sec" title="Take the proposed numbers" onclick="anaRow(${ri},${pi},'to')">Proposed</button>`:''}</td></tr>`; }).join('');
+    const sv=ana.saved[r], st=ana.dirty[r]?'<span style="color:#b45309">● changes not saved</span>':sv?`<span style="color:#15803d">✔ saved by ${esc(sv.by||'')} ${sv.at?new Date(sv.at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):''}</span>`:'<span class="muted">not saved yet</span>';
+    return `<div class="card"><div class="day-head" onclick="anaToggle(${ri})"><span>${esc(r)}: ${from} → <b>${to}</b> <small class="muted">(${to-from>0?'+':''}${to-from})</small></span><span id="anst_${ri}" style="font-size:12px">${applied.length?'':st}</span></div>
+      <div id="an_${ri}" style="display:none;overflow-x:auto"><table><tr><th>Product</th>${dates.map(d=>`<th class="num">${dayShort(d)}</th>`).join('')}<th></th></tr>${rows}</table>
+      ${!locked?`<p class="muted" style="margin:6px 0">Small grey numbers: planned→proposed. The box is what will be saved: leave it, press Planned or Proposed for the row, or type your own.</p><div class="row"><button class="btn sm" onclick="anaSave(${ri})">💾 Save the changes</button></div>`:''}</div></div>`;
   }).join('');
-  const appliedInfo=ana.applied.length?(()=>{ const p=ana.applied[0].name.split('__'); return `<p class="pill paid" style="display:inline-block;margin-top:6px">Applied by ${esc(p[4]||'')} on ${esc(p[3]||'')} · ${new Date(ana.applied[0].createdDateTime).toLocaleString('en-GB')}</p>`; })():'';
-  M.innerHTML=`<div class="card"><h2>Analysis</h2>
+  const appliedInfo=applied.length?(()=>{ const p=applied[0].name.split('__'); return `<p class="pill paid" style="display:inline-block;margin-top:6px">Applied by ${esc(p[4]||'')} on ${esc(p[3]||'')} · ${new Date(applied[0].createdDateTime).toLocaleString('en-GB')}</p>
+    ${admin?`<div class="row" style="margin-top:6px"><button class="btn sm" onclick="anaList(false)">🖨 Open the print list</button><button class="btn sm sec" onclick="anaList(true)">✉ Save and email the list again</button></div>`:''}`; })():'';
+  const stepCard=locked?'':(ana.step==='trays'?'':`<div class="card"><p><b>${nSaved}</b> of <b>${ana.R.length}</b> retailers saved.${nSaved<ana.R.length?' Open each retailer and press “Save the changes”.':''}</p><button class="btn" ${nSaved<ana.R.length?'disabled':''} onclick="anaTrays()">Next: ovens and trays ▶</button></div>`);
+  M.innerHTML=stHtml+`<div class="card"><h2>Analysis</h2>
     <p><b>Reviewed:</b> ${fmtD(rev.window.start)} – ${fmtD(rev.window.end)} (compared with ${fmtD(rev.compared.start)} – ${fmtD(rev.compared.end)})<br>
-    <b>Next week:</b> ${fmtD(rev.next_week.start)} – ${fmtD(rev.next_week.end)} · <b>${nowTot} → ${newTot}</b> (${newTot-nowTot>=0?'+':''}${newTot-nowTot}) · increases proposed +${incUp}</p>
-    <p class="muted">"From" numbers are what was actually delivered in the reviewed week. Nothing changes in Deliveries until an Admin presses Apply. Rejected lines keep the "from" number. Any number can still be changed by hand in Deliveries afterwards.</p>
-    ${appliedInfo}<div class="row" style="margin-top:6px">${rulesBtn}</div></div>
+    <b>Plan:</b> ${fmtD(rev.next_week.start)} – ${fmtD(rev.next_week.end)} · <b>${nowTot} → ${newTot}</b> (${newTot-nowTot>=0?'+':''}${newTot-nowTot})</p>
+    <p class="muted">“Planned” numbers are what was actually delivered on the same weekday in the reviewed days. Nothing changes in Deliveries until an Admin approves the ovens and trays table and presses Apply. Any number can still be changed by hand in Deliveries afterwards.</p>
+    ${appliedInfo}<div class="row" style="margin-top:6px">${rulesBtn}${admin&&!stHtml?'<button class="btn sm sec" onclick="anaRequestRun()">🔄 Run the review again</button>':''}</div></div>
   <div class="card"><h2>How each branch did</h2><div style="overflow-x:auto"><table><tr><th>Branch</th><th class="num">Deliv.</th><th class="num">Sold</th><th class="num">Returns</th><th class="num">Target</th><th></th></tr>${score}</table></div>
   ${rev.capped&&rev.capped.length?`<p class="muted" style="margin-top:6px">Step cap applied: ${esc(rev.capped.join('; '))}</p>`:''}</div>
-  ${branchCards}
-  ${admin&&!ana.applied.length?`<div class="card"><p>${undecided?`<b>${undecided}</b> changed line(s) still need ✅ or ✖.`:'All changed lines decided.'}</p><button class="btn" ${undecided?'disabled':''} onclick="anaApply()">Apply to next week's Deliveries</button></div>`:''}
-  ${!admin?'<p class="muted">Only an Admin can approve and apply.</p>':''}`;
+  ${branchCards}${stepCard}<div id="anaTrays"></div>
+  ${!admin?'<p class="muted">Only an Admin can save, approve and apply.</p>':''}`;
+  anaKeepOpen();
+  if(!locked&&ana.step==='trays') anaTraysRender();
 }
-function anaSet(rk,v){ ana.status[rk]=v; const [r,p]=rk.split('|'); if(v==='no') ana.rev.lines.filter(l=>l.retailer===r&&l.product===p).forEach(l=>ana.final[anaKey(l)]=l.from); else ana.rev.lines.filter(l=>l.retailer===r&&l.product===p&&ana.final[anaKey(l)]===l.from&&l.to!==l.from).forEach(l=>ana.final[anaKey(l)]=l.to); const open=document.getElementById('an_'+slug(r))?.style.display; renderAnalysis().then(()=>{ if(open==='') { const b=document.getElementById('an_'+slug(r)); if(b) b.style.display=''; } }); }
-function anaAll(r,v){ ana.rev.lines.filter(l=>l.retailer===r&&l.to!==l.from).forEach(l=>{ ana.status[r+'|'+l.product]=v; ana.final[anaKey(l)]= v==='no'?l.from:l.to; }); renderAnalysis().then(()=>{ const b=document.getElementById('an_'+slug(r)); if(b) b.style.display=''; }); }
-function anaEdit(k,val,rk){ ana.final[k]=Math.max(0,Math.round(Number(val)||0)); ana.status[rk]='ok'; }
-async function anaApply(){
+function anaMarkDirty(r){ ana.dirty[r]=true; if(ana.step==='trays'){ ana.step='plan'; ana.tray={adj:{}}; renderAnalysis(); return; } const ri=ana.R.indexOf(r), el=document.getElementById('anst_'+ri); if(el) el.innerHTML='<span style="color:#b45309">● changes not saved</span>'; }
+function anaEdit(li,val){ const l=ana.rev.lines[li]; ana.final[anaKey(l)]=Math.max(0,Math.round(Number(val)||0)); anaMarkDirty(l.retailer); }
+function anaRow(ri,pi,which){ const r=ana.R[ri], ls=ana.rev.lines.filter(l=>l.retailer===r), p=[...new Set(ls.map(l=>l.product))][pi];
+  ls.filter(l=>l.product===p).forEach(l=>{ ana.final[anaKey(l)]=l[which]; const el=document.getElementById('anc_'+ana.rev.lines.indexOf(l)); if(el) el.value=l[which]; }); anaMarkDirty(r); }
+async function anaSave(ri){
+  if(!isAdmin()) return; if(!needDevice()) return;
+  const r=ana.R[ri], rev=ana.rev, now=new Date(), values={};
+  rev.lines.filter(l=>l.retailer===r).forEach(l=>{ values[l.product+'|'+l.date]=Number(ana.final[anaKey(l)])||0; });
+  const body={id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,review:rev.generated_at,next_week:rev.next_week,retailer:r,values,saved_by:currentUser.name,device:deviceName(),at:now.toISOString(),app:APP_VERSION};
+  const rel=`${PLAN_DRAFTS}/${rev.next_week.start.slice(0,7)}/${rev.next_week.start}__${slug(r)}__${tsCompact(now)}__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`;
+  await qPut({rel,body,kind:'plan_drafts',queued_at:now.toISOString(),tries:0}); flushQueue();
+  ana.saved[r]={by:currentUser.name,at:now.toISOString()}; delete ana.dirty[r]; ana.open[ri]=false; await renderAnalysis();
+}
+
+/* ---- step 2: ovens and trays ---- */
+async function anaTrays(){
+  if(!isAdmin()) return;
+  show('Reading the plan days in the Master (samples, Lido, G\'eez, clients)…');
+  try{ await anaLoadMaster(true); }catch(e){ hide(); alert('Could not read the Master: '+(e.message||e)); return; }
+  hide(); ana.step='trays'; ana.tray={adj:{}}; await renderAnalysis();
+}
+function anaTraysRender(){
+  const box=document.getElementById('anaTrays'); if(!box) return;
+  const rev=ana.rev, dates=ana.dates, lines=anaAllLines(), calc=trayCalc(lines,dates), iss=trayIssues(calc,dates);
+  const cnt=o=>Object.entries(o.n).map(([k,v])=>`${v} ${k}`).join(' + ')||'0';
+  const cell=(d,g)=>`<td class="num" style="${d[g].rem?'background:#fff3e0':''}"><b>${d[g].trays}</b><br><small class="muted">${cnt(d[g])}</small></td>`;
+  const focCell=d=>`<td class="num" style="${d.foc15.rem||d.foc10.rem?'background:#fff3e0':''}"><b>${d.focTrays}</b><br><small class="muted">${d.foc15.u} pcs${d.foc10.trays?` + Lido ${d.foc10.u}`:''}</small></td>`;
+  const ovc=(n,pairOk)=>`<td class="num">${pairOk?'':'<span style="color:#b45309">'}<b>${ovTxt(n)}</b>${pairOk?'':' ⚠</span>'}</td>`;
+  const tbl=dates.map(dt=>{ const d=calc[dt], bOk=d.breadTrays%2===0; return `<tr><td>${dayShort(dt)}</td>${cell(d,'white')}${ovc(d.white.trays,bOk)}${cell(d,'brown')}${ovc(d.brown.trays,bOk)}${focCell(d)}${ovc(d.focTrays,d.focTrays%2===0)}</tr>`; }).join('')
+    +(()=>{ const T=trayTotals(calc,dates); return `<tr style="font-weight:700;border-top:2px solid #000"><td>Week total</td><td class="num">${T.white}</td><td class="num">${ovTxt(T.white)}</td><td class="num">${T.brown}</td><td class="num">${ovTxt(T.brown)}</td><td class="num">${T.foc}</td><td class="num">${ovTxt(T.foc)}</td></tr>`; })();
+  const btn=(label,dt,g,delta,sec)=>`<button class="btn sm ${sec?'sec':''}" onclick="anaTrayFix('${dt}','${g}',${delta})">${label}</button>`;
+  const issHtml=iss.map(i=>{
+    if(i.kind==='fill'){ const fixed=i.g==='foc10';
+      return `<div class="row" style="align-items:center;margin:4px 0"><span style="flex:1"><b>${dayShort(i.date)} · ${TRAY_NAME[i.g]}</b>: ${unitsTxt(i.g,i.down)} over full trays.</span>${fixed?'<span class="muted">Lido is a fixed line: change it in Deliveries.</span>':btn('▼ Reduce '+unitsTxt(i.g,i.down).replace(/ \(.*/,''),i.date,i.g,-i.down)+btn('▲ Increase '+unitsTxt(i.g,i.up).replace(/ \(.*/,''),i.date,i.g,i.up,true)}</div>`; }
+    if(i.kind==='pair'&&i.g==='bread') return `<div class="row" style="align-items:center;margin:4px 0"><span style="flex:1"><b>${dayShort(i.date)} · Bread</b>: ${calc[i.date].breadTrays} trays – an oven needs 2.</span>${btn('▼ 1 white tray',i.date,'white',-24)}${btn('▼ 1 brown tray',i.date,'brown',-24)}${btn('▲ 1 white tray',i.date,'white',24,true)}${btn('▲ 1 brown tray',i.date,'brown',24,true)}</div>`;
+    if(i.kind==='pair') return `<div class="row" style="align-items:center;margin:4px 0"><span style="flex:1"><b>${dayShort(i.date)} · Focaccia</b>: ${calc[i.date].focTrays} trays – an oven needs 2.</span>${btn('▼ 1 tray (15)',i.date,'foc15',-15)}${btn('▲ 1 tray (15)',i.date,'foc15',15,true)}</div>`;
+    return `<div style="margin:4px 0"><b>${dayShort(i.date)}</b>: not counted in the trays (no product, or a product the app does not know): ${esc(i.list.join('; '))}</div>`; }).join('');
+  const adj=Object.keys(ana.tray.adj).map(k=>rev.lines.find(l=>anaKey(l)===k)).filter(Boolean).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  const adjHtml=adj.length?`<h3 style="margin-top:12px">Changes from this table</h3><p class="muted">Suggested lines – edit any number; the table recalculates.</p><table><tr><th>Day</th><th>Retailer</th><th>Product</th><th class="num">Saved</th><th class="num">New</th></tr>
+    ${adj.map(l=>`<tr><td>${dayShort(l.date)}</td><td>${esc(l.retailer.replace('Shoppers ',''))}</td><td>${esc(l.product)}</td><td class="num">${Number(ana.final[anaKey(l)])||0}</td><td class="num"><input class="cell" style="width:48px;font-weight:700" type="number" min="0" value="${ana.tray.adj[anaKey(l)]}" onchange="anaTrayEdit(${rev.lines.indexOf(l)},this.value)"></td></tr>`).join('')}</table>
+    <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="ana.tray={adj:{}};anaTraysRender()">Undo all changes from this table</button></div>`:'';
+  const missing=lines.filter(l=>l.missing).length;
+  box.innerHTML=`<div class="card"><h2>Ovens and trays</h2>
+    <p class="muted">Tray = 4 large loaves or baguettes, 8 small, 12 sandwich (large and small can share; white and brown never share a tray). Focaccia 15 a tray (Shoppers, Butcher) or 10 plain (Lido). An oven takes 2 trays; focaccia pairs only with focaccia. Samples, Lido, G'eez and client lines are counted from the Master.</p>
+    <div style="overflow-x:auto"><table><tr><th>Day</th><th class="num">White trays</th><th class="num">White ovens</th><th class="num">Brown trays</th><th class="num">Brown ovens</th><th class="num">Focaccia trays</th><th class="num">Focaccia ovens</th></tr>${tbl}</table></div>
+    <p class="muted">½ oven = one white tray sharing an oven with one brown tray. Focaccia trays include Lido (10 plain a tray).</p>
+    ${missing?`<p class="muted">${missing} plan line(s) were not found in the Master rows; they are counted from the plan.</p>`:''}
+    ${iss.length?`<h3 style="margin-top:12px">Your choice is needed (${iss.length})</h3>${issHtml}`:'<p style="margin-top:8px;color:#15803d"><b>✔ Every tray is full and every oven has 2 trays.</b></p>'}
+    ${adjHtml}
+    <div class="row" style="margin-top:12px"><button class="btn sec" onclick="ana.step='plan';ana.tray={adj:{}};renderAnalysis()">◀ Back to the retailers</button>
+    <button class="btn" onclick="anaApply(${iss.length})">${iss.length?`Approve with ${iss.length} open point(s) and apply`:'✅ Approve the table and apply to Deliveries'}</button></div></div>`;
+}
+function anaTrayFix(dt,g,delta){
+  const s=traySuggest(ana.rev,anaEff,dt,g,delta);
+  if(s.left>0){ alert(`This ${delta>0?'increase':'reduction'} does not fit on the retailer lines of ${dayShort(dt)} (${unitsTxt(g,s.left).replace(/ \(.*/,'')} cannot be placed: branches on hold stay at their contract minimum). Nothing was changed - choose the other option, or edit the numbers by hand.`); return false; }
+  Object.entries(s.changes).forEach(([k,v])=>{ if(v===(Number(ana.final[k])||0)) delete ana.tray.adj[k]; else ana.tray.adj[k]=v; });
+  anaTraysRender(); return true;
+}
+function anaTrayEdit(li,val){ const l=ana.rev.lines[li], k=anaKey(l), v=Math.max(0,Math.round(Number(val)||0)); if(v===(Number(ana.final[k])||0)) delete ana.tray.adj[k]; else ana.tray.adj[k]=v; anaTraysRender(); }
+
+/* ---- step 3: apply, then the print list ---- */
+async function anaApply(openIssues){
   if(!isAdmin()) return;
   const rev=ana.rev, mode=saveMode();
-  if(mode!=='master' && !needDevice()) return;
-  const lines=rev.lines.map(l=>({...l,final:Number(ana.final[anaKey(l)])||0,status:ana.status[anaRowKey(l)]||(l.to===l.from?'unchanged':'ok')}));
+  if(!needDevice()) return;
+  const lines=rev.lines.map(l=>{ const k=anaKey(l), f=anaEff(l), tray=ana.tray.adj[k]!==undefined; return {...l,final:f,status:tray?'tray':f===l.to?(l.to===l.from?'unchanged':'proposed'):f===l.from?'planned':'own',tray_adj:tray?f-(Number(ana.final[k])||0):0}; });
   const up=lines.reduce((s,l)=>s+Math.max(0,l.final-l.from),0), dn=lines.reduce((s,l)=>s+Math.min(0,l.final-l.from),0);
   const tot=lines.reduce((s,l)=>s+l.final,0);
-  if(!confirm(`Apply next week's numbers (${rev.next_week.start} to ${rev.next_week.end})?\n\nTotal ${tot} units (increases +${up}, reductions ${dn}).\nApproved by ${currentUser.name}.`)) return;
+  if(!confirm(`Apply the plan ${rev.next_week.start} to ${rev.next_week.end}?\n\nTotal ${tot} units (increases +${up}, reductions ${dn}).${openIssues?`\n\n${openIssues} oven/tray point(s) are still open.`:''}\nApproved by ${currentUser.name}.`)) return;
   let written=0, missing=[];
   if(mode!=='entries'){
-    show('Reading next week in the Master…');
-    const idx=await loadDateIndex(true); const a=new Date(rev.next_week.start+'T00:00:00'), b=new Date(rev.next_week.end+'T00:00:00');
-    const rr=rowsForRange(idx,a,b); if(!rr){ hide(); alert('Next week has no rows in the Master yet. Nothing was applied.'); return; }
-    const rows=await loadBlock(rr.r1,rr.r2);
+    show('Reading the plan days in the Master…');
+    let rows; try{ rows=await anaLoadMaster(true); }catch(e){ hide(); alert((e.message||e)+' Nothing was applied.'); return; }
     const reqs=[];
     lines.forEach(l=>{
       const hit=rows.filter(x=>x.date&&ymd(x.date)===l.date&&cName(x.name)===cName(l.retailer)&&String(x.product||'').trim()===l.product&&String(x.type||'').trim().toLowerCase()!=='sample');
@@ -1672,24 +1851,69 @@ async function anaApply(){
       l.master_row=hit[0].row; l.master_before=Number(hit[0].plan)||0;
       if(l.master_before!==l.final) reqs.push({id:'a'+reqs.length,method:'PATCH',url:`${fileItemPath()}/workbook/worksheets('2026')/range(address='G${hit[0].row}')`,body:{values:[[l.final]]}});
     });
-    show(`Writing ${reqs.length} number(s) to next week…`);
+    show(`Writing ${reqs.length} number(s) to Deliveries…`);
     let res; try{ res=await gbatch(reqs); }catch(e){ hide(); alert('Apply failed: '+(e.message||e)+'\nNothing may have been written - try again.'); return; }
     const fails=Object.values(res).filter(r=>r.status>=400);
     written=reqs.length-fails.length;
     if(fails.length){ hide(); alert(fails.length+' number(s) failed to write (is the Master open in Excel?). Close it and press Apply again - it only rewrites what is still different.'); return; }
   }
-  const now=new Date();
+  const now=new Date(), calc=trayCalc(anaAllLines(),ana.dates);
+  const trays=ana.dates.map(dt=>{ const d=calc[dt]; return {date:dt,white_trays:d.white.trays,white_ovens:d.white.trays/2,brown_trays:d.brown.trays,brown_ovens:d.brown.trays/2,focaccia_trays:d.focTrays,focaccia_lido_trays:d.foc10.trays,focaccia_ovens:d.focTrays/2}; });
   const body={id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,review:rev.generated_at,window:rev.window,next_week:rev.next_week,rules_version:rev.rules_version,
-    approved_by:currentUser.name,device:deviceName(),at:now.toISOString(),save_mode:mode,written,missing,
-    lines:lines.map(l=>({retailer:l.retailer,product:l.product,date:l.date,from:l.from,proposed:l.to,final:l.final,status:l.status,master_before:l.master_before??null,master_row:l.master_row??null}))};
+    approved_by:currentUser.name,device:deviceName(),at:now.toISOString(),save_mode:mode,written,missing,app:APP_VERSION,trays,tray_open_points:openIssues||0,
+    lines:lines.map(l=>({retailer:l.retailer,product:l.product,date:l.date,from:l.from,proposed:l.to,final:l.final,status:l.status,tray_adj:l.tray_adj,master_before:l.master_before??null,master_row:l.master_row??null}))};
   const rel=`_data/approvals/${rev.next_week.start.slice(0,7)}/${rev.next_week.start}__applied__${tsCompact(now)}__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`;
   await qPut({rel,body,kind:'approvals',queued_at:now.toISOString(),tries:0}); await flushQueue();
+  lines.forEach(l=>{ ana.final[anaKey(l)]=l.final; }); ana.tray={adj:{}}; ana.step='plan';
   hide();
-  alert(`Applied. ${written} number(s) changed in next week's Deliveries.`+(missing.length?`\n\nNot found in the Master (check by hand):\n${missing.slice(0,12).join('\n')}`:''));
-  cache.dateIndex=null; renderAnalysis();
+  alert(`Applied. ${written} number(s) changed in Deliveries.`+(missing.length?`\n\nNot found in the Master (check by hand):\n${missing.slice(0,12).join('\n')}`:'')+'\n\nThe print list is being prepared now.');
+  cache.dateIndex=null;
+  await anaList(true);
+  await renderAnalysis();
+}
+async function anaListPdf(lines,calc,dates){
+  const jsPDF=await pdfLibs(); const doc=new jsPDF({unit:'mm',format:'a4',compress:true}); const rev=ana.rev;
+  const period=`${dayLong(rev.next_week.start)} - ${dayLong(rev.next_week.end)}`;
+  const base={theme:'grid',styles:{font:'helvetica',fontSize:7,textColor:0,lineColor:0,lineWidth:0.2,cellPadding:0.5},headStyles:{fillColor:255,textColor:0,fontStyle:'bold'},footStyles:{fillColor:255,textColor:0,fontStyle:'bold'},margin:{left:14,right:14,bottom:6}};
+  dates.forEach((dt,i)=>{ if(i) doc.addPage(); const x=new Date(dt+'T00:00:00');
+    const rows=lines.filter(l=>l.date===dt&&(l.name||l.product||l.qty));
+    doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.text('Massimo Italian Bread - production list',14,11);
+    doc.setFontSize(10); doc.text(dayLong(dt),14,16.5); doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text(`Plan ${period}`,196,16.5,{align:'right'});
+    // Total = the Master's Total: (Produced - Returned) x price per unit, in TZS; blank when the line has no price
+    const lt=l=>{ const p=Number(l.price); if(l.price===''||l.price===null||l.price===undefined||isNaN(p)) return null; return Math.round(((Number(l.qty)||0)-(Number(l.ret)||0))*p); };
+    const dayT=rows.reduce((s,l)=>s+(lt(l)||0),0);
+    doc.autoTable({...base,startY:19,head:[['Date','Day','Name','Detailed product','Produced','Returned /Charity','Total (TZS)']],
+      body:rows.map(l=>{ const t=lt(l); return [fdShort(x),DAYS7[(x.getDay()+6)%7],l.name,l.product+(l.sample?' (sample)':''),String(l.qty),(l.ret===null||l.ret===undefined||l.ret==='')?'':String(l.ret),t===null?'':t.toLocaleString('en-US')]; }),
+      foot:[['','','','Total',String(rows.reduce((s,l)=>s+(Number(l.qty)||0),0)),'',dayT.toLocaleString('en-US')]],showFoot:'lastPage',
+      columnStyles:{0:{cellWidth:15},1:{cellWidth:19},4:{halign:'center',cellWidth:17},5:{halign:'center',cellWidth:25},6:{halign:'right',cellWidth:24}}}); });
+  doc.addPage(); doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.text('Ovens and trays',14,11); doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text(`Plan ${period}`,14,16.5);
+  const T=trayTotals(calc,dates), oh=t=>ovTxt(t).replace('½',' 1/2');
+  doc.autoTable({...base,styles:{...base.styles,fontSize:9,cellPadding:2,halign:'center'},startY:20,head:[['Day','White trays','White ovens','Brown trays','Brown ovens','Focaccia trays','Focaccia ovens']],
+    body:dates.map(dt=>{ const d=calc[dt]; return [dayLong(dt),String(d.white.trays),oh(d.white.trays),String(d.brown.trays),oh(d.brown.trays),String(d.focTrays)+(d.foc10.trays?` (Lido ${d.foc10.trays})`:''),oh(d.focTrays)]; }),
+    foot:[['Week total',String(T.white),oh(T.white),String(T.brown),oh(T.brown),String(T.foc),oh(T.foc)]],columnStyles:{0:{halign:'left'}}});
+  doc.setFontSize(8); doc.text('1/2 oven = one white tray sharing an oven with one brown tray. Focaccia trays include Lido (10 plain a tray).',14,doc.lastAutoTable.finalY+6);
+  return doc.output('blob');
+}
+async function anaList(send){ // build the list from the Master; send=true also saves it in Receipts/Weekly_Plans and asks the laptop to email it
+  const rev=ana.rev;
+  try{
+    show('Building the print list from the Master…');
+    await anaLoadMaster(true);
+    const lines=anaAllLines(), calc=trayCalc(lines,ana.dates), blob=await anaListPdf(lines,calc,ana.dates);
+    if(!send){ hide(); window.open(URL.createObjectURL(blob),'_blank'); return; }
+    if(!needDevice()){ hide(); return; }
+    const now=new Date(), name=`Production_list_${rev.next_week.start}_to_${rev.next_week.end}_${tsCompact(now)}.pdf`, pdfRel=`Receipts/Weekly_Plans/${name}`;
+    const pdf=new Blob([blob],{type:'application/pdf'});
+    let stored=true; try{ await putBinaryFile(pdfRel,pdf); }catch(e){ stored=false; await qPut({rel:pdfRel,blob:pdf,kind:'weekly_plans',queued_at:now.toISOString(),tries:0}); }
+    const req={id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,kind:'production_list',attachment:pdfRel,period:rev.next_week,
+      subject:`Massimo production list ${rev.next_week.start} to ${rev.next_week.end}`,requested_by:currentUser.name,device:deviceName(),at:now.toISOString(),app:APP_VERSION};
+    await qPut({rel:`_data/outbox/${rev.next_week.start.slice(0,7)}/${rev.next_week.start}__production-list__${tsCompact(now)}__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`,body:req,kind:'outbox',queued_at:now.toISOString(),tries:0});
+    await flushQueue(); hide();
+    if(confirm(`The print list is ${stored?'saved in Receipts > Weekly_Plans':'waiting to be sent to the shared drive'} and will be emailed by the laptop within a few minutes (the laptop must be on).\n\nOpen it now to print?`)) window.open(URL.createObjectURL(blob),'_blank');
+  }catch(e){ hide(); alert('The print list could not be built: '+(e.message||e)+'\nThe plan itself is applied. Try “Save and email the list again” on the Analysis page.'); }
 }
 
-/* ---------- RULES (view + edit + approve; the Friday review reads the approved file) ---------- */
+/* ---------- RULES (view + edit + approve; the weekly review reads the approved file) ---------- */
 let rulesDraft=null, rulesOrig=null;
 async function renderRules(){
   show('Loading rules…');
@@ -1699,7 +1923,7 @@ async function renderRules(){
   if(!rulesDraft || rulesOrig.version!==r.version){ rulesOrig=r; rulesDraft=JSON.parse(JSON.stringify(r)); }
   const R=rulesDraft, admin=isAdmin(), dis=admin?'':'disabled';
   const num=(path,val,w)=>`<input type="number" step="any" value="${val}" ${dis} style="width:${w||70}px" onchange="rulesSet('${path}',this.value,true)">`;
-  M.innerHTML=`<div class="card"><h2>Rules</h2><p class="muted">Version ${esc(R.version)} · approved by ${esc(R.approved_by||'')} ${esc(R.approved_at||'')}. The Friday review uses the approved version. ${admin?'Change anything, then press Save &amp; approve.':'Only an Admin can change the rules.'}</p>
+  M.innerHTML=`<div class="card"><h2>Rules</h2><p class="muted">Version ${esc(R.version)} · approved by ${esc(R.approved_by||'')} ${esc(R.approved_at||'')}. The weekly review (Wednesday 14:00) uses the approved version. ${admin?'Change anything, then press Save &amp; approve.':'Only an Admin can change the rules.'}</p>
    <div class="row"><button class="btn sm sec" onclick="go('ana')">◀ Analysis</button></div></div>
   <div class="card"><h2>Timeline</h2>${R.timeline.map((t,i)=>`<div class="row" style="margin-bottom:6px"><input value="${esc(t.when)}" ${dis} style="flex:1" onchange="rulesDraft.timeline[${i}].when=this.value"><input value="${esc(t.what)}" ${dis} style="flex:3" onchange="rulesDraft.timeline[${i}].what=this.value">${admin?`<button class="btn sm sec" onclick="rulesDraft.timeline.splice(${i},1);renderRules()">✖</button>`:''}</div>`).join('')}
    ${admin?`<button class="btn sm sec" onclick="rulesDraft.timeline.push({when:'',what:''});renderRules()">+ Add</button>`:''}</div>
@@ -1826,7 +2050,7 @@ async function markPaid(weekLabel,weekStart,totRow,col,colName,amount,invNo,paid
    The app is now the ONLY invoice maker (the laptop scripts only CHECK the invoices every night).
    Numbers are fixed by client + period, continuing the existing sequences, so two devices can never give
    two different invoices the same number:  Shoppers 5 per week (SMA,SMB,SMI,STE,SML) from 29 Dec 2025;
-   Village/Butcher/Baraka/Karnitas one per week from their start; Lido/Geez one per month.
+   Village/Butcher one per week from their start; Lido/Geez one per month (Baraka/Karnitas removed 15 Nov 2026).
    Each issued PDF is saved in Receipts\...\ (shared drive) and recorded in _data\invoices\ (who, when, totals). */
 const WAVE_LOGO='data:image/png;base64,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';
 let invCfg=null, invPeriod=null, invMonth=null;
@@ -1937,11 +2161,37 @@ async function invOnDrive(cfg,c,p,num,dirCache){ // PDF with this number already
 }
 async function invRegister(periodStartYmd){ try{ return await listFolder(`_data/invoices/${periodStartYmd.slice(0,7)}`); }catch(e){ return []; } }
 
+// 17 Nov 2026: any restaurant (Type of client "Restaurant" or "Other") with deliveries in the month that is not in
+// _config/invoicing.json gets a monthly bill automatically (from cfg.auto_monthly_from). On its first issue the client
+// is written into invoicing.json, so its code and invoice numbering stay fixed from then on.
+let invAuto={};
+function invAutoCode(name,cfg){ const used=new Set(cfg.clients.map(c=>c.code).concat(Object.keys(invAuto)));
+  const base=(String(name).replace(/restaurant|ristorante|cafe|hotel/ig,'').replace(/[^A-Za-z]/g,'').toUpperCase()+'XXX').slice(0,3);
+  if(!used.has(base)) return base; for(let i=2;i<10;i++){ const c=base.slice(0,2)+i; if(!used.has(c)) return c; } return base+rand4(); }
+async function invAutoClients(cfg,month){
+  const from=cfg.auto_monthly_from||'2026-11-01'; if(ymd(month)<from) return [];
+  const a=new Date(month.getFullYear(),month.getMonth(),1), b=new Date(month.getFullYear(),month.getMonth()+1,0);
+  const idx=await loadDateIndex(); const rr=rowsForRange(idx,a,b); if(!rr) return [];
+  const rows=await loadBlock(rr.r1,rr.r2); const known=new Set(cfg.clients.flatMap(c=>c.names.map(cName)));
+  const found={}; rows.forEach(x=>{ const t=String(x.ctype||'').trim(), n=String(x.name||'').trim();
+    if(!n||!['Restaurant','Other'].includes(t)||known.has(cName(n))||String(x.type||'').trim().toLowerCase()==='sample') return;
+    if(!(Number(x.plan)>0)||!PCAT[String(x.product||'').trim()]) return; found[cName(n)]=found[cName(n)]||n; });
+  return Object.values(found).map(n=>{ const ex=Object.values(invAuto).find(c=>c.names[0]===n); if(ex) return ex;
+    const c={code:invAutoCode(n,cfg),billing:'monthly',template:'invoice',series:'monthly',start:ymd(a),names:[n],bill_name:n,address:'',city:'Dar es Salaam',tin:'',
+      cats:['Large','Baguette','Small','Focaccia'],folder:'Restaurant_Receipts_2026',auto:true}; invAuto[c.code]=c; return c; });
+}
+async function invPersistAuto(c){ // first issue of a new restaurant: write it into _config/invoicing.json (Admin)
+  const cur=await getJsonFile('_config/invoicing.json'); if(!cur) throw new Error('_config/invoicing.json not found');
+  if(cur.clients.some(x=>x.code===c.code)) throw new Error(`Code ${c.code} is already used in the invoicing settings - reload the page.`);
+  const nc={...c}; delete nc.auto; cur.clients.push(nc); cur.version=ymd(new Date())+'_auto_'+c.code;
+  await putJsonOverwrite('_config/invoicing.json',cur); invCfg=null; delete invAuto[c.code];
+}
 async function renderInvoicing(box){
   const cfg=await loadInvCfg();
   if(!invPeriod){ const t=new Date(); invPeriod=addDays(monday(t),-7); }
   if(!invMonth){ const t=new Date(); invMonth=new Date(t.getFullYear(),t.getMonth()-1,1); }
-  const weekly=cfg.clients.filter(c=>c.billing==='weekly'), monthly=cfg.clients.filter(c=>c.billing==='monthly');
+  let autoM=[]; try{ autoM=await invAutoClients(cfg,invMonth); }catch(e){}
+  const weekly=cfg.clients.filter(c=>c.billing==='weekly'), monthly=cfg.clients.filter(c=>c.billing==='monthly').concat(autoM);
   const reg=[...await invRegister(ymd(invPeriod)),...(ymd(invMonth).slice(0,7)!==ymd(invPeriod).slice(0,7)?await invRegister(ymd(invMonth)):[])];
   const today=new Date(); today.setHours(0,0,0,0); const dirCache={};
   const rowFor=async c=>{ const p=invPeriodFor(c,c.billing==='monthly'?invMonth:invPeriod); const num=invNumber(c,p); if(num.n<1) return '';
@@ -1953,7 +2203,7 @@ async function renderInvoicing(box){
       :(unfinished?'<span class="pill pend">period not finished</span>':'<span class="pill un">not issued</span>');
     const warn=d.noPrice?`<br><span class="pill pend">${d.noPrice} unit(s) with no price - left off</span>`:'';
     const k=`${c.code}|${ymd(p.start)}`;
-    return `<tr><td><b>${esc(c.code)}</b><br><small class="muted">${esc(c.branch||c.bill_name)}</small></td><td>${num.n}/${cfg.year_suffix}/${c.code}<br><small class="muted">${ymd(p.start)} → ${ymd(p.end)}</small></td>
+    return `<tr><td><b>${esc(c.code)}</b><br><small class="muted">${esc(c.branch||c.bill_name)}</small>${c.auto?'<br><span class="pill pend">new restaurant - saved in the settings when first issued</span>':''}</td><td>${num.n}/${cfg.year_suffix}/${c.code}<br><small class="muted">${ymd(p.start)} → ${ymd(p.end)}</small></td>
       <td class="num">${fmt(d.total)}${d.total===0?'<br><span class="pill pend">ZERO</span>':''}${warn}</td><td>${st}</td>
       <td style="white-space:nowrap"><button class="btn sm sec" onclick="invAction('${k}','preview')">Preview</button>
       ${isAdmin()?`<button class="btn sm" onclick="invAction('${k}','issue')">${(done.length||onDrive)?'Re-issue':'Approve & issue'}</button>`:''}</td></tr>`; };
@@ -1971,7 +2221,7 @@ async function renderInvoicing(box){
 }
 let _lastPdf=null;
 async function invAction(k,what,silent){
-  const [code,start]=k.split('|'); const cfg=await loadInvCfg(); const c=cfg.clients.find(x=>x.code===code);
+  const [code,start]=k.split('|'); const cfg=await loadInvCfg(); const c=cfg.clients.find(x=>x.code===code)||invAuto[code];
   const p=invPeriodFor(c,new Date(start+'T00:00:00')); const num=invNumber(c,p);
   const today=new Date(); today.setHours(0,0,0,0);
   if(what==='issue'){
@@ -1988,6 +2238,7 @@ async function invAction(k,what,silent){
   if(!silent && !confirm(`Issue invoice ${num.n}/${cfg.year_suffix}/${c.code} for ${c.branch||c.bill_name}, ${ymd(p.start)} to ${ymd(p.end)}: ${tzs(data.total)}?${data.total===0?'\n\nWARNING: total is ZERO.':''}${data.noPrice?`\n\nWARNING: ${data.noPrice} unit(s) have no price in the Master and are left off this invoice. Fix the price first if they should be billed.`:''}\n\nIt will be saved in the shared drive (${invFileRel(cfg,c,p,num).split('/').slice(0,-1).join('/')}).`)) return false;
   show('Saving to the shared drive…');
   try{
+    if(c.auto) await invPersistAuto(c);
     const saved=await putBinaryFile(invFileRel(cfg,c,p,num),new File([blob],fileName,{type:'application/pdf'}));
     const now=new Date();
     await putJsonFile(`_data/invoices/${ymd(p.start).slice(0,7)}/${ymd(p.start)}__${c.code}__${num.n}__${tsCompact(now)}__${slug(deviceName())}__${slug(currentUser.name)}__${rand4()}.json`,
