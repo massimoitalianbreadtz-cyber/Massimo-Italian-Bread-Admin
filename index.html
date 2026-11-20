@@ -990,6 +990,7 @@ async function loadReceiptPdfs(){
 const EXP_CATS=['Company Assets','Salaries','Materials','Bakery Provisions','Utilities','Maintance','Taxes'];
 let expRowMeta=null;
 async function renderExpenses(){
+  stopQrScan(); capturedReceiptBlob=null; lastReceiptCode=null; lastTraUrl=null; // 20 Nov 2026: never carry a photo over to another expense
   show('Reading this month’s expenses…');
   const r=await g(wsRange('2026 Expenditure',EXP_RANGE)+'?$select=values');
   hide();
@@ -1023,11 +1024,15 @@ async function renderExpenses(){
   <div class="card"><h2>Add new expense</h2>
   ${!writeAllowed?`<p class="muted">Your role (${ROLES[currentUser.role]?.label||''}) can’t add expenses.</p>`: !expRowMeta ? `<p class="err">No blank pre-formatted row is left in the Master's [2026 Expenditure] sheet. In Excel, copy the last row's formula down a few hundred more rows, save, then come back and Sync.</p>` : `
   ${expRowMeta.d && ymd(expRowMeta.d)!==ymd(today)?`<p class="muted">Note: the next ready row in the Master was originally pre-dated ${ymd(expRowMeta.d)} (the template hasn't been extended past there yet) — the date below defaults to today instead; change it if this expense is actually for a different day.</p>`:''}
-  <div class="row" style="margin:4px 0 2px"><button class="btn sm sec" onclick="startQrScan()">📷 Scan receipt QR (TRA)</button><span id="qrMsg" class="muted"></span></div>
+  <div class="row" style="margin:4px 0 2px"><button class="btn sm sec" onclick="startQrScan()">📷 Scan receipt QR (TRA)</button>
+    <label class="btn sm sec" style="margin:0;cursor:pointer">🧾 Add receipt photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="qrFromFile(this)"></label>
+    <span id="qrMsg" class="muted"></span></div>
   <div id="qrScanBox" style="display:none"><video id="qrVideo" style="width:100%;max-height:320px;border-radius:12px;background:#000" playsinline muted></video>
-    <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="stopQrScan()">Cancel</button>
-    <label class="btn sm sec" style="margin:0;cursor:pointer">Use a photo instead<input type="file" accept="image/*" capture="environment" style="display:none" onchange="qrFromFile(this)"></label></div></div>
+    <div class="row" style="margin-top:6px"><button class="btn sm" onclick="snapFrame()">📸 Take photo</button><button class="btn sm sec" onclick="stopQrScan()">Cancel</button></div>
+    <p class="muted" style="margin:4px 0 0">The QR is read by itself. No QR on the receipt? Press “Take photo”.</p></div>
+  <div id="photoBox"></div>
   <div id="qrResult"></div>
+  <div id="traBox"></div>
   <label>Date</label><input id="exDate" type="date" value="${ymd(today)}">
   <label>Type of expenditure</label><select id="exType">${EXP_CATS.map(c=>`<option>${c}</option>`).join('')}</select>
   <label>Provider</label><input id="exProvider" placeholder="e.g. Theresia Joseph">
@@ -1082,7 +1087,7 @@ async function saveExpense(rowNum){
     if(saveMode()!=='master'){
       const now=new Date(), vat=vatRaw===''?null:Number(vatRaw);
       await enqueueEntry('expenses',dateStr,[type,provider],{id:`${tsCompact(now)}_${deviceName()}_${rand4()}`,date:dateStr,category:type,
-        provider,details:detail,net:price,vat,total:price+(vat||0),receipt_no:receipt,tin_vrn:tin,how,
+        provider,details:detail,net:price,vat,total:price+(vat||0),receipt_no:receipt,tin_vrn:tin,how,tra_url:lastTraUrl||null,photo:!!capturedReceiptBlob,
         entered_by:currentUser?currentUser.name:'',device:deviceName(),at:now.toISOString(),master_row:rowNum,save_mode:saveMode(),app:APP_VERSION});
       qBadge(); flushQueue();
     }
@@ -1097,6 +1102,7 @@ async function saveExpense(rowNum){
       catch(e){ alert('Expense saved, but filing the receipt photo failed: '+(e.message||e)+'\n\nYou can add it to the Expense Receipts folder manually if needed.'); }
       hide();
     }
+    lastTraUrl=null;
     cache.exp=null; await renderExpenses();
   }
 }
@@ -1108,7 +1114,7 @@ async function saveExpense(rowNum){
    The amounts / TIN / seller name are NOT in the QR — they are on TRA's verification page, which
    a browser app cannot fetch cross-origin (CORS). So those fields stay manual, and the app offers
    a one-tap link to the TRA page to check them. ---------- */
-let qrStream=null, qrRAF=null, capturedReceiptBlob=null, lastReceiptCode=null;
+let qrStream=null, qrRAF=null, capturedReceiptBlob=null, lastReceiptCode=null, lastTraUrl=null;
 const RECEIPT_PHOTO_MAXDIM=1600; // cap long edge so simple Graph upload (<4MB) always succeeds
 function canvasToCappedBlob(srcCanvas,cb){
   const scale=Math.min(1, RECEIPT_PHOTO_MAXDIM/Math.max(srcCanvas.width,srcCanvas.height));
@@ -1136,9 +1142,14 @@ function applyQr(text){
     const code=m[1].toUpperCase();
     lastReceiptCode=code;
     const rec=document.getElementById('exReceipt'); if(rec) rec.value=code;
+    lastTraUrl=String(text).trim();
     out.innerHTML=`<div class="ok">TRA receipt code <b>${esc(code)}</b> (issued ${m[2]}:${m[3]}:${m[4]}) filled into Receipt n.<br>
-    Amounts still need typing — they are only on TRA's page, which the app can't read automatically.<br>
-    <a href="${esc(text)}" target="_blank">Open this receipt on TRA to check ↗</a>${filedNote}</div>`;
+    TRA's official copy of this receipt is shown below - copy the supplier, amounts and VAT from it and check them before saving.<br>
+    <b>TRA first asks for the receipt time: choose ${m[2]}:${m[3]}:${m[4]}</b>${Number(m[2])<12?` - if TRA says the time is wrong, choose <b>${String(Number(m[2])+12).padStart(2,'0')}:${m[3]}:${m[4]}</b> (the code does not say morning or afternoon)`:''}.
+    (<a href="${esc(text)}" target="_blank">open it full screen ↗</a>)${filedNote}</div>`;
+    // 20 Nov 2026: the browser cannot READ TRA's page (TRA does not allow it), but it can SHOW it
+    const tb=document.getElementById('traBox'); if(tb) tb.innerHTML=`<div style="margin:6px 0"><div class="row" style="align-items:center"><b style="flex:1">TRA receipt</b><button class="btn sm sec" onclick="document.getElementById('traBox').innerHTML=''">Hide</button></div>
+      <iframe src="${esc(lastTraUrl)}" title="TRA receipt" style="width:100%;height:520px;border:1px solid #ccc;border-radius:8px;background:#fff" referrerpolicy="no-referrer"></iframe></div>`;
   } else {
     lastReceiptCode=null;
     const rec=document.getElementById('exReceipt'); if(rec) rec.value=String(text).slice(0,60);
@@ -1147,7 +1158,7 @@ function applyQr(text){
 }
 async function startQrScan(){
   const msg=document.getElementById('qrMsg'); if(msg) msg.textContent='';
-  capturedReceiptBlob=null; lastReceiptCode=null; // fresh attempt — discard any previous capture
+  lastReceiptCode=null; // 20 Nov 2026: an attached photo is kept until a new one is taken
   try{ await qrLibLoad(); }catch(e){ if(msg) msg.textContent=e.message; return; }
   const box=document.getElementById('qrScanBox'); box.style.display='';
   const video=document.getElementById('qrVideo');
@@ -1163,7 +1174,7 @@ async function startQrScan(){
         const im=cx.getImageData(0,0,cv.width,cv.height);
         const q=window.jsQR(im.data,im.width,im.height);
         if(q && q.data){
-          canvasToCappedBlob(cv,b=>{ if(b) capturedReceiptBlob=b; }); // save the frame that decoded successfully
+          canvasToCappedBlob(cv,b=>{ if(b){ capturedReceiptBlob=b; showPhoto(b); } }); // save the frame that decoded successfully
           stopQrScan(); applyQr(q.data); return;
         }
       }
@@ -1180,8 +1191,9 @@ function stopQrScan(){
 async function qrFromFile(inp){
   const msg=document.getElementById('qrMsg');
   const f=inp.files&&inp.files[0]; if(!f) return;
-  capturedReceiptBlob=null; lastReceiptCode=null; // fresh attempt — discard any previous capture
-  try{ await qrLibLoad(); }catch(e){ if(msg) msg.textContent=e.message; return; }
+  stopQrScan(); // 20 Nov 2026: free the camera before using the photo
+  capturedReceiptBlob=null; lastReceiptCode=null; lastTraUrl=null;
+  let jsqrOk=true; try{ await qrLibLoad(); }catch(e){ jsqrOk=false; }
   const img=new Image();
   img.onload=()=>{
     URL.revokeObjectURL(img.src);
@@ -1191,18 +1203,37 @@ async function qrFromFile(inp){
     const cap=Math.min(1, RECEIPT_PHOTO_MAXDIM/Math.max(img.width,img.height));
     scv.width=Math.max(1,Math.round(img.width*cap)); scv.height=Math.max(1,Math.round(img.height*cap));
     scv.getContext('2d').drawImage(img,0,0,scv.width,scv.height);
-    scv.toBlob(b=>{ if(b) capturedReceiptBlob=b; },'image/jpeg',0.85);
+    scv.toBlob(b=>{ if(b){ capturedReceiptBlob=b; showPhoto(b); } },'image/jpeg',0.85);
+    if(!jsqrOk||!window.jsQR){ if(msg) msg.textContent='Photo attached. (QR reader not available - type the receipt details.)'; return; }
     // Try a few scales — full-receipt photos often decode better downscaled, tight close-ups as-is.
-    for(const sc of [1,0.5,0.25,2]){
+    // 20 Nov 2026: never build a canvas above ~12 million pixels (phones refuse, and the photo was lost with it)
+    for(const sc of [1,0.5,0.25,2].filter(sc=>img.width*img.height*sc*sc<=12e6)){
       const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(img.width*sc)); cv.height=Math.max(1,Math.round(img.height*sc));
       const cx=cv.getContext('2d'); cx.drawImage(img,0,0,cv.width,cv.height);
       const im=cx.getImageData(0,0,cv.width,cv.height);
       const q=window.jsQR(im.data,im.width,im.height);
       if(q && q.data){ stopQrScan(); applyQr(q.data); return; }
     }
-    if(msg) msg.textContent='No QR found in that photo — the photo will still be filed to Expense Receipts when you save, but the receipt code/amounts need typing manually. Try a closer, sharper shot if you also want the code auto-filled.';
+    if(msg) msg.textContent='No QR code in this photo - that is fine: the photo is attached and will be filed when you save. Type the details below.';
   };
   img.src=URL.createObjectURL(f);
+}
+// 20 Nov 2026: take a photo from the live scanner (receipts with no QR, or a QR that will not read)
+function snapFrame(){
+  const video=document.getElementById('qrVideo'), msg=document.getElementById('qrMsg');
+  if(!video||!video.videoWidth){ if(msg) msg.textContent='The camera is not ready yet - try again in a second.'; return; }
+  const cv=document.createElement('canvas'); cv.width=video.videoWidth; cv.height=video.videoHeight; cv.getContext('2d').drawImage(video,0,0);
+  let q=null; try{ const im=cv.getContext('2d').getImageData(0,0,cv.width,cv.height); q=window.jsQR?window.jsQR(im.data,im.width,im.height):null; }catch(e){}
+  canvasToCappedBlob(cv,b=>{ if(b){ capturedReceiptBlob=b; showPhoto(b); } });
+  stopQrScan();
+  if(q&&q.data) applyQr(q.data); else if(msg) msg.textContent='Photo taken (no QR code read). Type the details below.';
+}
+function showPhoto(b){
+  const box=document.getElementById('photoBox'); if(!box) return;
+  const d=document.getElementById('exDate'); const mon=d&&d.value?monthFolderName(d.value):'the month of the expense';
+  box.innerHTML=`<div class="row" style="align-items:center;margin:6px 0"><img src="${URL.createObjectURL(b)}" style="width:72px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #ccc">
+    <div style="flex:1;font-size:13px">✔ <b>Photo attached.</b> It is filed in Expense Receipts / ${esc(mon)} when you save.</div>
+    <button class="btn sm sec" onclick="capturedReceiptBlob=null;document.getElementById('photoBox').innerHTML=''">Remove</button></div>`;
 }
 /* ---------- RECEIPT PHOTO FILING (2026-07-07, Gu request): whenever a receipt photo is
    scanned/captured above (camera or "Use a photo instead"), file it into OneDrive under
@@ -1235,7 +1266,13 @@ async function uploadReceiptPhoto(folderId,filename,blob){
   if(!r.ok){ const b=await r.text(); throw new Error('Photo upload failed: HTTP '+r.status+' '+b.slice(0,200)); }
   return r.json();
 }
+const EXP_RECEIPTS_DIR='Pagamenti, staff, Tasse, permessi e Commercialista/Expense Receipts';
 async function fileReceiptPhoto(dateStr,provider,code,blob){
+  // 20 Nov 2026: by exact path under Salty Water Administration (search can lag for days); month folder created if missing
+  const safeProvider=(provider||'receipt').replace(/[\\/:*?"<>|]+/g,' ').trim().replace(/\s+/g,' ');
+  return putBinaryFile(`${EXP_RECEIPTS_DIR}/${monthFolderName(dateStr)}/${dateStr}_${safeProvider}${code?('_'+code):''}.jpg`, new Blob([blob],{type:'image/jpeg'}));
+}
+async function fileReceiptPhotoBySearch(dateStr,provider,code,blob){ // old way, kept for reference
   let folderId=await resolveExpenseReceiptsFolder();
   if(!folderId) throw new Error('Could not find a folder named exactly "Expense Receipts" in OneDrive.');
   const monthName=monthFolderName(dateStr);
@@ -1330,7 +1367,8 @@ function renderSettings(){
 }
 async function showLinkedPath(){ const el=document.getElementById('linkedPath'); if(!el||!S.fileId||!account) return;
   try{ const it=await g(`${fileItemPath()}?$select=name,parentReference`); const p=masterPathOf(it), ok=it.name===MASTER_NAME&&MASTER_DIR.test(p);
-    el.innerHTML=(ok?'✔ ':'<b style="color:#b91c1c">⚠ NOT THE MASTER: </b>')+esc(p+'/'+it.name); }catch(e){ el.textContent='(could not check the linked file)'; } }
+    el.innerHTML=(ok?'✔ ':'<b style="color:#b91c1c">⚠ NOT THE MASTER: </b>')+esc(p+'/'+it.name)+(ok?'':' <button class="btn sm" onclick="fixLinkNow()">Fix the link now</button>'); }catch(e){ el.textContent='(could not check the linked file)'; } }
+async function fixLinkNow(){ masterOk=null; try{ await ensureMasterLink(); }catch(e){ alert(e.message||e); } renderSettings(); }
 /* ---------- USER ADMIN (item 1, Admin-only) ---------- */
 function renderUserAdmin(){
   const users=getUsers();
@@ -1433,7 +1471,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-11-20-planB-7.2';
+const APP_VERSION='2026-11-20-planB-7.3';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
