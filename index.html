@@ -204,7 +204,30 @@ function sleep(ms){ return new Promise(res=>setTimeout(res,ms)); }
 // often hit the same throttle window again. Now: (1) small delay between chunks so bursts of writes
 // don't stack up, (2) any sub-request that comes back 429 is retried up to 3x, honoring Graph's
 // Retry-After header when present, else exponential backoff (1s/2s/4s).
+// 20 Nov 2026: from 17 to 19 Nov the app wrote into Receipts/Backups/..._before_changes_... because the Master had been
+// replaced on the laptop and OneDrive kept the old file (with the app's file id) as the backup. Now every write to the
+// Master first checks that the linked file is exactly Salty_Water_2026_Master.xlsx in .../Salty Water Administration/Receipts;
+// if not, it re-links to that file automatically (only if exactly one exists) or refuses to save.
+const MASTER_NAME='Salty_Water_2026_Master.xlsx', MASTER_DIR=/Salty Water Administration\/Receipts$/;
+let masterOk=null; // file id verified in this session
+const masterPathOf=it=>decodeURIComponent((it&&it.parentReference&&it.parentReference.path)||'').replace(/^.*root:/,'');
+async function ensureMasterLink(){
+  if(masterOk&&masterOk===S.fileId) return true;
+  let it=null; try{ it=await g(`${fileItemPath()}?$select=id,name,parentReference`); }catch(e){ it=null; }
+  if(it&&it.name===MASTER_NAME&&MASTER_DIR.test(masterPathOf(it))){ masterOk=S.fileId; return true; }
+  const was=it?`${masterPathOf(it)}/${it.name}`:'a file that no longer exists';
+  let relinked=false;
+  // first: the Master's exact path, worked out from the linked file's own folder (search can lag by days)
+  try{ const p=masterPathOf(it), i=p.indexOf('/Salty Water Administration'), drv=(it&&it.parentReference&&it.parentReference.driveId)||S.fileDriveId;
+    if(i>=0&&drv){ const mp=p.slice(0,i)+'/Salty Water Administration/Receipts/'+MASTER_NAME;
+      const m=await g(`/drives/${drv}/root:${mp.split('/').map(encodeURIComponent).join('/')}?$select=id,name,parentReference`);
+      if(m&&m.name===MASTER_NAME&&MASTER_DIR.test(masterPathOf(m))){ S.fileId=m.id; S.fileDriveId=(m.parentReference&&m.parentReference.driveId)||drv; LSset('fileId',S.fileId); LSset('fileDriveId',S.fileDriveId||''); relinked=true; } } }catch(e){}
+  if(!relinked){ try{ relinked=await autoLinkMaster(); }catch(e){} }
+  if(relinked){ masterOk=S.fileId; cache.dateIndex=null; cache.exp=null; alert(`The app was linked to ${was}, not the Master.\n\nIt is now linked to Receipts/${MASTER_NAME}. Your save goes there.`); return true; }
+  throw new Error(`STOP - the app is linked to ${was}, not Receipts/${MASTER_NAME}. Nothing was saved. Go to Settings > Master Excel file > Find, and choose the one in "Salty Water Administration/Receipts".`);
+}
 async function gbatch(reqs){ // reqs: [{id,method,url,body?}] max 20 per call
+  if(reqs.some(r=>String(r.url||'').startsWith(fileItemPath()))){ const before=fileItemPath(); await ensureMasterLink(); const now=fileItemPath(); if(now!==before) reqs=reqs.map(r=>({...r,url:String(r.url).split(before).join(now)})); }
   const t=await getToken(); const out={};
   for(let i=0;i<reqs.length;i+=20){
     if(i>0) await sleep(250); // pace successive chunks
@@ -375,6 +398,8 @@ async function render(){
     // renderSettings() still protects it once a Viewer PIN is actively in use — see settingsWriteAllowed.
     if(!account){ return renderLogin(); }
     if(!currentUser){ return renderPinGate(); }
+    // 20 Nov 2026: make sure every page reads (and writes) the real Master, not a copy
+    if(masterOk!==S.fileId){ try{ await ensureMasterLink(); }catch(e){ M.innerHTML=`<div class="card" style="border:2px solid #b91c1c"><h2>⚠ Wrong file linked</h2><p>${esc(e.message||e)}</p><button class="btn" onclick="page='set';render()">Open Settings</button></div>`; return; } }
     document.getElementById('userchip').style.display='';
     document.getElementById('userchip').textContent=currentUser.name+' ('+ROLES[currentUser.role].label+') · switch';
     applyRoleNav();
@@ -984,7 +1009,7 @@ async function renderExpenses(){
     const row=V[i]; const d=excelDate(row[0]);
     const rowNum=i+1;
     if(d && d>=mStart && d<=mEnd && row[1]) filled.push({rowNum,row,d});
-    if(nextBlank===null && !row[0] && !row[1]) nextBlank={rowNum,row,d:null};
+    if(nextBlank===null && !row[0] && !row[1] && rowNum>(Number(LS('lastExpRow'))||0)) nextBlank={rowNum,row,d:null}; // 20 Nov: never re-use a row this device just wrote
   }
   expRowMeta = nextBlank;
   const writeAllowed=can('writeExpenses');
@@ -1052,6 +1077,7 @@ async function saveExpense(rowNum){
   hide();
   if(fails.length){ alert(fails.length+' field(s) failed to save. Check the file is not locked and retry.'); }
   else {
+    LSset('lastExpRow',rowNum); // 20 Nov 2026: the next expense from this device always goes below this row
     // Plan B (A4): the same expense as one entry file (queued, sent when there is signal).
     if(saveMode()!=='master'){
       const now=new Date(), vat=vatRaw===''?null:Number(vatRaw);
@@ -1276,7 +1302,7 @@ function renderSettings(){
   <label>1. Azure App Client ID (from SETUP_GUIDE.md, step 1)</label>
   <input id="cid" value="${esc(S.clientId||'')}" placeholder="e.g. 1a2b3c4d-...." ${settingsWriteAllowed?'':'disabled'}>
   <div class="row" style="margin-top:8px"><button class="btn sm" ${settingsWriteAllowed?'':'disabled'} onclick="S.clientId=document.getElementById('cid').value.trim();LSset('clientId',S.clientId);location.reload()">Save Client ID</button></div>
-  <label>2. Master Excel file ${S.fileId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
+  <label>2. Master Excel file ${S.fileId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'} <small id="linkedPath" class="muted"></small></label>
   <button class="btn sm sec" ${settingsWriteAllowed?'':'disabled'} onclick="findFile()">Find Salty_Water_2026_Master.xlsx</button>
   <div style="margin-top:8px"><label style="margin:0">Or paste a OneDrive share link to the file</label><input id="shareUrl" placeholder="https://1drv.ms/..." ${settingsWriteAllowed?'':'disabled'}><button class="btn sm sec" style="margin-top:6px" ${settingsWriteAllowed?'':'disabled'} onclick="linkByShareUrl()">Link it</button></div>
   <label>3. Timetables folder ${S.tfolderId?'<span class="pill paid">linked</span>':'<span class="pill pend">not linked</span>'}</label>
@@ -1300,7 +1326,11 @@ function renderSettings(){
   </div>
   <div class="card"><h2>Safety</h2><p class="muted">This app can only: edit columns G and H of the [2026] sheet, add data to blank pre-formatted rows on the [2026 Expenditure] sheet, file scanned receipt photos into the Expense Receipts folder (by month) when an expense is saved, write NEW small entry files into the _data folder (never edits or deletes them), write the shared user list (_config/users.json, Admin only), and read (never write) everything else. It never deletes rows, never edits formulas, never touches other sheets. It no longer writes cell colours — Income is read-only.</p></div>`;
   qAll().then(a=>{ const e=document.getElementById('setq'); if(e) e.textContent=a.length+(a.length&&a[0].lastErr?(' (last error: '+a[0].lastErr+')'):''); });
+  showLinkedPath();
 }
+async function showLinkedPath(){ const el=document.getElementById('linkedPath'); if(!el||!S.fileId||!account) return;
+  try{ const it=await g(`${fileItemPath()}?$select=name,parentReference`); const p=masterPathOf(it), ok=it.name===MASTER_NAME&&MASTER_DIR.test(p);
+    el.innerHTML=(ok?'✔ ':'<b style="color:#b91c1c">⚠ NOT THE MASTER: </b>')+esc(p+'/'+it.name); }catch(e){ el.textContent='(could not check the linked file)'; } }
 /* ---------- USER ADMIN (item 1, Admin-only) ---------- */
 function renderUserAdmin(){
   const users=getUsers();
@@ -1330,15 +1360,8 @@ function removeUser(i){
    with a permanent "itemNotFound" until Gu manually re-did "Find the file" in Settings. These two
    mirror the same by-name search Settings already uses, so render()'s catch block can recover
    automatically instead of leaving her stuck. */
-async function reresolveFileId(){
-  try{
-    const r=await g(`/me/drive/root/search(q='Salty_Water_2026_Master')?$select=id,name,parentReference&$top=10`);
-    const hit=(r.value||[]).find(x=>x.name.toLowerCase().endsWith('.xlsx'));
-    if(!hit) return false;
-    S.fileId=hit.id; S.fileDriveId=(hit.parentReference&&hit.parentReference.driveId)||null;
-    LSset('fileId',S.fileId); LSset('fileDriveId',S.fileDriveId||'');
-    return true;
-  }catch(e){ return false; }
+async function reresolveFileId(){ // 20 Nov 2026: only ever the Master in Receipts (it used to take the first .xlsx found - could be a backup)
+  try{ masterOk=null; return await autoLinkMaster(); }catch(e){ return false; }
 }
 async function reresolveFolderId(){
   try{
@@ -1410,7 +1433,7 @@ async function linkFolderByShareUrl(){
      master = master only (rollback, exactly the old app)
    Files are queued on the device first (IndexedDB) and sent when there is signal, so nothing is lost
    offline and nothing is typed twice. The header shows "N waiting to send". */
-const APP_VERSION='2026-11-17-planB-7';
+const APP_VERSION='2026-11-20-planB-7.2';
 const saveMode = () => LS('saveMode') || 'both';
 const deviceName = () => (LS('deviceName')||'').trim();
 function slug(s){ return String(s||'').normalize('NFKD').replace(/[^\w\s-]/g,'').trim().replace(/\s+/g,'-').slice(0,40)||'x'; }
@@ -1704,13 +1727,13 @@ async function anaStatusHtml(rev){
   const stopped=st&&st.result==='incomplete'&&(!rev||String(st.run_at)>String(rev.generated_at));
   const btn=isAdmin()?`<button class="btn sm" ${pending.length?'disabled':''} onclick="anaRequestRun()">🔄 Run the review again</button>`:'';
   const pend=pending.length?`<p><b>⏳ Requested by ${esc(pending[0].name.split('__')[3]||'')} at ${new Date(pending[0].createdDateTime).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}.</b> The laptop runs it within about 15 minutes (it must be on). Reload this page to see the result.</p>`:'';
-  if(stopped) return `<div class="card" style="border:2px solid #b45309"><h2>⚠ The review stopped: returns missing</h2>
+  if(stopped) return {stopped:true,html:`<div class="card" style="border:2px solid #b45309"><h2>⚠ The review stopped: returns missing</h2>
     <p>The review of ${fmtD(st.window.start)} – ${fmtD(st.window.end)} (run ${new Date(st.run_at).toLocaleString('en-GB',{weekday:'short',hour:'2-digit',minute:'2-digit'})}) found deliveries with no returns entered on:
     <b>${st.missing.map(m=>`${fmtD(m.date)} (${m.lines} lines)`).join(', ')}</b>. Missing returns would count as sell-outs, so nothing was proposed.</p>
     <p>Enter those returns in <b>Deliveries</b>, then run the review again. The plan for ${fmtD(st.next_week.start)} – ${fmtD(st.next_week.end)} will appear here.</p>
-    ${pend}<div class="row">${btn}<button class="btn sm sec" onclick="dWeek=monday(new Date('${st.missing.length?st.missing[0].date:st.window.start}T00:00:00'));go('deliv')">Open Deliveries</button></div></div>`;
-  if(pend) return `<div class="card">${pend}</div>`;
-  return '';
+    ${pend}<div class="row">${btn}<button class="btn sm sec" onclick="dWeek=monday(new Date('${st.missing.length?st.missing[0].date:st.window.start}T00:00:00'));go('deliv')">Open Deliveries</button></div></div>`};
+  if(pend) return {stopped:false,html:`<div class="card">${pend}</div>`};
+  return {stopped:false,html:''};
 }
 async function anaRequestRun(){
   if(!isAdmin()||!needDevice()) return;
@@ -1722,7 +1745,7 @@ async function anaRequestRun(){
 async function renderAnalysis(){
   show('Loading the latest review…');
   let rev=null; try{ rev=await getJsonFile('_plan/latest.json'); }catch(e){ rev=null; }
-  const stHtml=await anaStatusHtml(rev);
+  const stR=await anaStatusHtml(rev), stHtml=stR.html;
   let applied=[];
   if(rev){ try{ applied=(await listFolder(`_data/approvals/${rev.next_week.start.slice(0,7)}`)).filter(f=>f.name.startsWith(rev.next_week.start+'__')).sort((a,b)=>a.createdDateTime<b.createdDateTime?1:-1); }catch(e){} }
   const rulesBtn=`<button class="btn sm sec" onclick="go('rules')">📋 Rules</button>`;
@@ -1735,6 +1758,10 @@ async function renderAnalysis(){
     else await anaLoadDrafts();
   }
   ana.applied=applied; hide();
+  if(stR.stopped&&!ana.showOld){ const fd=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+    M.innerHTML=stHtml+`<div class="card"><p class="muted">The new plan (Friday to Thursday) appears here as soon as the review has run with all returns entered. Until then you can still change any number by hand in <b>Deliveries</b>.</p>
+      <div class="row"><button class="btn sm sec" onclick="ana.showOld=true;renderAnalysis()">Show last plan (${fd(rev.next_week.start)} – ${fd(rev.next_week.end)}${applied.length?', already applied':''})</button><button class="btn sm sec" onclick="go('rules')">📋 Rules</button></div></div>`;
+    return; }
   const admin=isAdmin(), locked=!admin||!!applied.length, dates=ana.dates;
   const nowTot=rev.lines.reduce((s,l)=>s+l.from,0), newTot=rev.lines.reduce((s,l)=>s+anaEff(l),0);
   const fmtD=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
@@ -1759,7 +1786,7 @@ async function renderAnalysis(){
   const appliedInfo=applied.length?(()=>{ const p=applied[0].name.split('__'); return `<p class="pill paid" style="display:inline-block;margin-top:6px">Applied by ${esc(p[4]||'')} on ${esc(p[3]||'')} · ${new Date(applied[0].createdDateTime).toLocaleString('en-GB')}</p>
     ${admin?`<div class="row" style="margin-top:6px"><button class="btn sm" onclick="anaList(false)">🖨 Open the print list</button><button class="btn sm sec" onclick="anaList(true)">✉ Save and email the list again</button></div>`:''}`; })():'';
   const stepCard=locked?'':(ana.step==='trays'?'':`<div class="card"><p><b>${nSaved}</b> of <b>${ana.R.length}</b> retailers saved.${nSaved<ana.R.length?' Open each retailer and press “Save the changes”.':''}</p><button class="btn" ${nSaved<ana.R.length?'disabled':''} onclick="anaTrays()">Next: ovens and trays ▶</button></div>`);
-  M.innerHTML=stHtml+`<div class="card"><h2>Analysis</h2>
+  M.innerHTML=(stR.stopped?`<div class="card"><p><b>This is the LAST plan, shown for reference only</b>${applied.length?' (already applied, so it cannot be changed here)':''}. <button class="btn sm sec" onclick="ana.showOld=false;renderAnalysis()">Hide it</button></p></div>`:stHtml)+`<div class="card"><h2>Analysis</h2>
     <p><b>Reviewed:</b> ${fmtD(rev.window.start)} – ${fmtD(rev.window.end)} (compared with ${fmtD(rev.compared.start)} – ${fmtD(rev.compared.end)})<br>
     <b>Plan:</b> ${fmtD(rev.next_week.start)} – ${fmtD(rev.next_week.end)} · <b>${nowTot} → ${newTot}</b> (${newTot-nowTot>=0?'+':''}${newTot-nowTot})</p>
     <p class="muted">“Planned” numbers are what was actually delivered on the same weekday in the reviewed days. Nothing changes in Deliveries until an Admin approves the ovens and trays table and presses Apply. Any number can still be changed by hand in Deliveries afterwards.</p>
